@@ -154,10 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
     remote_asr.add_argument("--timeout", type=float)
     remote_asr.add_argument("--allow-external", action="store_true", help="确认允许将该音频上传到指定厂商")
 
-    correct = sub.add_parser("transcript-correct", help="课程 ASR 转写稿分块纠错，落盘 corrected/report，避免 Codex 吞整节原稿")
+    correct = sub.add_parser("transcript-correct", help="长篇 ASR 转写稿分块纠错，并落盘 corrected/report")
     correct.add_argument("input_file")
     correct.add_argument("--output-dir")
-    correct.add_argument("--domain", default="fengshui")
+    correct.add_argument("--domain", default="general", help="转写内容所属领域或主题，例如 software、finance、general")
     correct.add_argument("--chunk-chars", type=int, default=3500)
     correct.add_argument("--free-only", action="store_true", help="只允许免费模型，禁用低价付费主修正")
     correct.add_argument("--paid-main", action="store_true", help="主修正优先使用低价付费模型")

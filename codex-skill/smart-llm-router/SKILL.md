@@ -66,13 +66,13 @@ smart-llm-router clear
 5. Estimate complexity locally before spending tokens:
 
 ```bash
-smart-llm-router score "清洗 OCR：生命綫 深長" --task clean
+smart-llm-router score "清洗 OCR：服務狀態 正常" --task clean
 smart-llm-router score "审计架构并设计多步骤优化方案" --task draft
-smart-llm-router route-plan "修正奇门课程转写稿" --task transcript_correct --domain qimen --quality-target production --paid-allowed
+smart-llm-router route-plan "修正技术培训转写稿" --task transcript_correct --domain software --quality-target production --paid-allowed
 smart-llm-router route-plan "规划、执行并审计系统升级" --task plan --quality-target frontier --paid-allowed --max-cost-usd 0.05
 smart-llm-router workflow-plan /path/to/workflow-contract.json --output-dir ./runtime/workflows
 smart-llm-router workflow-check /path/to/workflow-contract.json /path/to/checkpoint.json --output-dir ./runtime/workflows
-smart-llm-router transcript-correct /path/to/lesson.chunked.txt --domain qimen --paid-main --cross-check
+smart-llm-router transcript-correct /path/to/transcript.txt --domain software --paid-main --cross-check
 ```
 
 6. Run tasks:
@@ -83,11 +83,11 @@ smart-llm-router task "任务提示" --task classify --free-only
 smart-llm-router task "任务提示" --task draft --paid
 smart-llm-router task "制定可验收方案" --task plan --quality-target frontier --paid --max-cost-usd 0.05
 smart-llm-router task "修正转写稿" --task transcript_correct --context "原始转写..." --paid
-smart-llm-router task "总结生命线判断要点" --task summarize --retrieve-dir /path/to/vault --max-context-chars 6000
-smart-llm-router embed "风水讲究形势与理气" --provider zhipu --model embedding-3 --dimensions 256
-smart-llm-router rerank --query "风水气口" "风水重视气口与来龙" "今天适合整理文件" --provider zhipu --model rerank
-smart-llm-router embed "风水讲究形势与理气" --provider qwen --model text-embedding-v4 --dimensions 256
-smart-llm-router task "只输出 JSON：判断图片是否包含手掌" --task vision --image /path/to/hand.png --free-only
+smart-llm-router task "总结文档中的缓存失效策略" --task summarize --retrieve-dir /path/to/vault --max-context-chars 6000
+smart-llm-router embed "分布式系统需要处理故障恢复" --provider zhipu --model embedding-3 --dimensions 256
+smart-llm-router rerank --query "数据库索引优化" "复合索引应结合查询条件设计" "今天适合整理文件" --provider zhipu --model rerank
+smart-llm-router embed "分布式系统需要处理故障恢复" --provider qwen --model text-embedding-v4 --dimensions 256
+smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/document.png --free-only
 ```
 
 7. Review the cost ledger and task-specific route health:
@@ -126,7 +126,7 @@ Default behavior:
 - Use explicit production roles: Qwen/Kimi for planning, GLM/DeepSeek for execution, Gemini Free Tier/DeepSeek/Qwen for audit, a family different from execution for verification, and conditional Kimi/Qwen quality enhancement.
 - Treat same-model key rotation as availability failover only. Plan audit must differ from planning, and final verification must differ from execution; the five roles do not require five unique providers.
 - Distinguish `permanent_free`, `trial_quota`, and `paid`; Qwen, NVIDIA, and Ark trial resources are not permanent-free promises.
-- Use `--privacy auto|local_only|external_allowed`; palm originals, WeChat chats, identity data, and raw private media fail closed unless external upload is explicitly allowed.
+- Use `--privacy auto|local_only|external_allowed`; private images, chat records, identity data, and raw private media fail closed unless external upload is explicitly allowed.
 - Use `--max-cost-usd` for a hard task budget. Unknown paid prices fail closed when a budget is present.
 - If a model fails with 429, timeout, 403/404, or empty content, mark it in cooldown and skip it next time.
 - If the free pool appears fully cooled down, run a light refresh before using paid fallback.
@@ -149,8 +149,8 @@ Default behavior:
 - Use `capabilities` to inspect provider-family model modes, including text, vision/OCR, ASR/TTS, image/video generation, embedding, rerank, and code coverage. It separates known API-key capability from currently configured/probed executable model routes, and does not print API keys.
 - Treat raw `rerank` scores as provider-specific relative ordering signals, not universal absolute relevance thresholds. For production Feng Shui retrieval, combine rank, top-k, source type, term hits, and second evidence checks.
 - Current production hot path: `embed` defaults to Qwen `text-embedding-v4`, then Zhipu `embedding-3`; `rerank` defaults to Zhipu `rerank`. Qwen `gte-rerank` has a reserved DashScope adapter path but should stay disabled until account/service permission passes `refresh-modalities`.
-- Use `transcript-correct` for course ASR correction. It chunks the transcript, applies deterministic cleanup, routes correction through low-cost models, optionally cross-checks, and writes corrected/report artifacts to disk.
-- For long course transcripts, Codex should only orchestrate and audit; it should not ingest the whole raw transcript.
+- Use `transcript-correct` for long-form ASR correction. It chunks the transcript, applies deterministic cleanup, routes correction through low-cost models, optionally cross-checks, and writes corrected/report artifacts to disk.
+- For long transcripts, Codex should only orchestrate and audit; it should not ingest the whole raw transcript.
 - Keep Volcano Ark online inference, Coding Plan, and endpoint ids separate. Their base URLs, model names, quotas, and billing paths are not interchangeable. Treat all configured model names as account-scoped candidates until discovery and task probes succeed.
 
 Task defaults from the latest benchmark:
@@ -196,7 +196,7 @@ After changes, run:
 python -m compileall smart_llm_router
 smart-llm-router refresh --timeout 6 --limit 5
 smart-llm-router task "只输出 OK" --task qa --free-only
-smart-llm-router task "只输出 JSON：判断图片是否包含手掌" --task vision --image /path/to/hand.png --free-only
+smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/document.png --free-only
 ```
 
 Do not run large benchmark sweeps unless the user explicitly asks; free providers can rate-limit.

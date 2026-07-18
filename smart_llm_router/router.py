@@ -193,7 +193,7 @@ SYSTEM_PROMPTS = {
     "qa": "你是基于材料的初级问答助手；不确定就说不确定。",
     "vision": "你是保守的图像观察助手。只描述图中可见事实，输出结构化 JSON，不做医学诊断、身份识别或确定性预测。",
     "ocr": "你是保守的图像/OCR 观察助手。只提取图中可见文字和版面事实，不补写看不清的内容。",
-    "transcript_correct": "你是中文易学课程 ASR 转写稿修正助手。只修正口误、同音错字、术语误识别、重复噪声和断句；保持老师原讲课顺序、判断链和案例逻辑；不确定处标【待复核】，不要编造。",
+    "transcript_correct": "你是中文 ASR 转写稿修正助手。只修正口误、同音错字、术语误识别、重复噪声和断句；保持讲者原有顺序、论证链和案例逻辑；不确定处标【待复核】，不要编造。",
     "audit": "你是严格审校助手。检查遗漏、术语错误、结构问题和不可靠推断，输出可执行问题清单。",
     "verify": "你是独立复验助手。不要沿用主模型的结论；从原始目标、输入和证据重新核对，明确通过项、失败项、差异和置信度。",
     "quality_enhance": "你是最终质量提升助手。在不改变事实和边界的前提下，消除遗漏与歧义，提升结构、表达和可执行性，并列明实质改动。",
@@ -2058,15 +2058,20 @@ def _infer_privacy_mode(
     signals = [
         term
         for term in (
-            "微信聊天",
             "聊天记录",
+            "对话记录",
             "客户原图",
             "用户原图",
-            "手掌照片",
-            "掌纹照片",
+            "私人照片",
+            "个人照片",
             "身份证",
             "手机号",
+            "家庭住址",
+            "病历",
+            "银行卡",
             "api key",
+            "access token",
+            "password",
             "secret",
             "private key",
         )
@@ -2897,7 +2902,7 @@ def remote_transcribe_media(
     timeout: float | None = None,
 ) -> dict[str, Any]:
     if not allow_external:
-        raise RuntimeError("远程 ASR 会上传音频；必须显式传入 --allow-external。私密课程默认继续使用本地 ASR。")
+        raise RuntimeError("远程 ASR 会上传音频；必须显式传入 --allow-external。私密音频默认继续使用本地 ASR。")
     source = Path(input_file).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(source)
@@ -3016,7 +3021,7 @@ def _modality_probe_messages(task: str, *, image_path: str | Path | None = None)
         return _messages_for_task(
             "transcript_correct",
             "只修正明显同音错字并输出一句话。",
-            "老师说这个金门不是这么看，鬼水要按天干语境复核。",
+            "讲者说这个接口不是这么调用的，缓存策略要结合并发语境复核。",
         )
     if task == "code":
         return _messages_for_task("code", "只输出 OK：检查 Python 表达式 1 + 1 == 2 是否成立。", None)
@@ -3116,11 +3121,11 @@ def refresh_model_pool_by_modality(
                 }
                 try:
                     if task == "embed":
-                        vectors, _usage = _call_embedding_compatible(choice, texts=["风水讲究形势与理气。"], dimensions=256, timeout=timeout)
+                        vectors, _usage = _call_embedding_compatible(choice, texts=["分布式系统需要处理故障恢复。"], dimensions=256, timeout=timeout)
                         _record_success(settings, choice, states)
                         row.update({"ok": True, "sample": f"embedding_dim={vectors[0]['dimensions']}"})
                     elif task == "rerank":
-                        results, _usage = _call_rerank_compatible(choice, query="风水气口", documents=["风水重视气口与来龙", "今天适合整理文件"], top_n=1, timeout=timeout)
+                        results, _usage = _call_rerank_compatible(choice, query="数据库索引优化", documents=["复合索引应结合查询条件设计", "今天适合整理文件"], top_n=1, timeout=timeout)
                         _record_success(settings, choice, states)
                         score = results[0].get("relevance_score") if results else None
                         row.update({"ok": True, "sample": f"top_score={score}"})
@@ -3454,10 +3459,9 @@ def run_llm_task(
 
 
 TRANSCRIPT_NOISE_PATTERNS = (
-    "明镜需要您的支持",
-    "中文字幕",
-    "请不吝点赞",
-    "订阅",
+    "请点赞并订阅",
+    "感谢观看",
+    "字幕由",
 )
 
 
@@ -3474,9 +3478,6 @@ def _clean_transcript_locally(text: str) -> tuple[str, list[str]]:
         if re.fullmatch(r"[。.\s]+", line):
             continue
         line = re.sub(r"\s+", " ", line)
-        if "金门" in line:
-            line = line.replace("金门", "景门")
-            notes.append("term_fix:金门->景门")
         lines.append(line)
     cleaned = "\n".join(lines)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
@@ -3513,7 +3514,7 @@ def transcript_correct(
     input_file: str | Path,
     *,
     output_dir: str | Path | None = None,
-    domain: str = "fengshui",
+    domain: str = "general",
     chunk_chars: int = 3500,
     free_only: bool = False,
     prefer_free: bool = True,
@@ -3532,16 +3533,16 @@ def transcript_correct(
     corrected_parts: list[str] = []
     chunk_rows: list[dict[str, Any]] = []
     prompt = (
-        "修正以下中文易学课程 ASR 转写稿。要求：\n"
-        "1. 保持老师原讲课顺序、判断链、案例过程和口语中的强调点。\n"
+        "修正以下中文 ASR 转写稿。要求：\n"
+        "1. 保持讲者原有顺序、论证链、案例过程和口语中的强调点。\n"
         "2. 只修正口误、同音错字、术语误识别、重复噪声和断句。\n"
-        "3. 不要改成商业咨询文案，不要泛化成摘要。\n"
+        "3. 不要改写成营销文案，不要泛化成摘要。\n"
         "4. 不确定的术语用【待复核】标出。\n"
-        f"5. 领域：{domain}。常见术语包括八卦、五行、天干地支、奇门八门、梅花体用、六爻用神等。\n"
+        f"5. 领域或主题：{domain}。只依据原文识别术语，不要凭主题补写内容。\n"
         "6. 下面【待修正原文】就是原文；请直接输出修正后的正文，不要要求我再提供材料。"
     )
     check_prompt = (
-        "审校这段已修正课程稿。重点检查术语是否改错、老师案例链是否遗漏、"
+        "审校这段已修正转写稿。重点检查术语是否改错、讲者论证链是否遗漏、"
         "是否把口语误改为新错误。只输出问题清单和必要修正建议。"
     )
     for index, chunk in enumerate(chunks, start=1):
@@ -3849,8 +3850,8 @@ def quick_vision_benchmark(settings: Settings, image_path: str | Path, *, timeou
 def quick_benchmark(settings: Settings, *, timeout: float = 8.0, limit: int = 12) -> dict[str, Any]:
     tasks = {
         "smoke": "只输出 OK。",
-        "classify": "只输出 JSON：给《麻衣神相 手相掌纹》分类，字段 domain, keywords, confidence。",
-        "clean": "清洗 OCR：生命綫 深長，智惠线 分明，感凊線 上扬；不 可 执 一 而 断。",
+        "classify": "只输出 JSON：判断《分布式缓存故障复盘》属于架构、运维还是测试，字段 domain, keywords, confidence。",
+        "clean": "清洗 OCR：服務狀態 正常，緩存命中率 穩定；請 保 留 原 意。",
     }
     candidates = _rank_choices(configured_models(settings, only_free=True), "qa")[:limit]
     result = {"created_at": _now().isoformat(), "candidates": []}

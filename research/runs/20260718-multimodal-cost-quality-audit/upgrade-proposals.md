@@ -15,7 +15,7 @@ task.
 3. Replace `free: bool` with `permanent_free | trial_quota | paid | local` and track quota expiry/remaining budget.
 4. Add per-job, per-day, and per-provider budgets plus a hard `max_cost` gate.
 5. Deduplicate choices by provider account, endpoint, and model; track key failover separately from model diversity.
-6. Make private palm/user/chat/course inputs `local_only` by default unless external use is explicitly allowed.
+6. Make private images, user records, chats, and raw media `local_only` by default unless external use is explicitly allowed.
 7. Prefer healthy DeepSeek direct Flash over the OpenRouter copy for paid text work when direct cost is lower.
 
 ## P1: Provider-Family Multimodal Completion
@@ -30,7 +30,7 @@ task.
 
 ## P2: Quality-Aware Escalation
 
-1. Build small local golden sets for classify, OCR, palm feature extraction, transcript correction, retrieval, code review, and consultation audit.
+1. Build small local golden sets for classify, OCR, document feature extraction, transcript correction, retrieval, code review, and final audit.
 2. Record task-level accuracy, evidence coverage, schema validity, latency, retries, and actual provider cost.
 3. Escalate only on low confidence, disagreement, missing evidence, failed schema, or high-risk output.
 4. For production outputs, use one selected main model per stage and one independent verifier only on high-risk chunks or the final artifact.
@@ -45,7 +45,7 @@ task.
 | Knowledge retrieval | Qwen `text-embedding-v4` batch | Zhipu `embedding-3` failover |
 | Evidence ranking | Zhipu `rerank` | Qwen3 rerank after benchmark |
 | Vision/OCR | local resize/OCR, NVIDIA/Zhipu free vision, then Gemini Free Tier for public inputs | Qwen VL, Zhipu V, Doubao/Kimi for unresolved cases |
-| Course ASR | local Whisper | flagged segments only to Groq/Qwen/Zhipu with permission |
+| Long-form ASR | local Whisper | flagged segments only to Groq/Qwen/Zhipu with permission |
 | Transcript correction | glossary + chunks + Qwen/NVIDIA free | DeepSeek Flash main, GLM independent check for high-risk chunks |
 | Code support | Codex controller, free model for bounded analysis | DeepSeek Flash for bulk review; Codex integrates/tests |
 | Planning | local constraints and acceptance extraction | Qwen 3.7 Max; Doubao Seed 2.1 Pro or Kimi K3 as alternatives |

@@ -50,7 +50,7 @@ enabled or production-ready.
 2. Qwen trial/free quota is represented as permanently free even though official pricing describes time-limited free quota for many models.
 3. Multiple NVIDIA keys duplicate the same model choices and can look like model diversity when they are only credential diversity.
 4. `openrouter/free` is random and rate-limited; it is unsuitable as a quality-critical code or audit default.
-5. Risk/privacy inference classifies a palm-photo audit as low risk and externally allowed unless the caller overrides it.
+5. Risk/privacy inference can classify a private-user image audit as low risk and externally allowed unless the caller overrides it.
 6. Direct DeepSeek is configured, but current paid text fallback often prefers the OpenRouter DeepSeek path first.
 7. The runtime ledger/cache/cooldown directory is currently under `/private/tmp`, so reboot persistence is not guaranteed.
 8. Video generation and TTS need asynchronous, modality-specific adapters and non-token cost accounting.
@@ -127,4 +127,4 @@ gate. This does not clear or bypass the current host dependency audit findings.
 - Forcing every governance stage onto a different provider family.
 - Treating possession of a Gemini API key as proof of paid entitlement.
 - Treating chat-completions as a universal endpoint for ASR, image, video, embedding, rerank, and TTS.
-- Uploading private palm photos, chats, or course audio for routine health probes.
+- Uploading private user images, chats, or raw audio for routine health probes.
