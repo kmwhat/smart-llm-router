@@ -1,0 +1,94 @@
+{
+  "schema": "smart_llm_router.golden_suite.v1",
+  "suite_id": "execute-public-v1",
+  "description": "Public synthetic implementation cases for screening low-cost execution candidates before explicit role-band registration.",
+  "task": "execute",
+  "proposed_role": "execute",
+  "proposed_quality_band": 2,
+  "quality_target": "draft",
+  "privacy": "external_allowed",
+  "thresholds": {
+    "min_cases": 5,
+    "min_case_pass_rate": 0.8,
+    "max_baseline_case_regression": 0.2,
+    "max_candidate_cost_usd": 0.000001,
+    "max_call_cost_usd": 0.01,
+    "min_health_samples": 3,
+    "baseline_required": true,
+    "independent_review_required": true,
+    "min_candidate_review_pass_rate": 0.8,
+    "min_candidate_win_or_tie_rate": 0.8,
+    "max_candidate_losses": 1
+  },
+  "rubric": [
+    "Produces a minimal implementation that directly addresses the supplied defect or contract.",
+    "Preserves relevant edge cases and avoids unrelated changes or invented dependencies.",
+    "Includes focused tests that would fail before the change and pass afterward.",
+    "Provides a practical rollback path for stateful or operational changes."
+  ],
+  "cases": [
+    {
+      "id": "python-last-item-off-by-one",
+      "prompt": "修复下面的公开代码问题。只输出一个 JSON 对象，顶层键必须是 files、changes、tests、rollback；四个键的值都必须是数组。changes 中给出最小代码修改，不要添加第三方依赖。",
+      "context": "Python 函数为 `def last(items): return items[len(items)]`。要求非空列表返回最后一项，空列表返回 None。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["files", "changes", "tests", "rollback"]},
+        {"type": "contains_any", "values": ["-1", "items[-1]"]},
+        {"type": "contains_any", "values": ["None", "空列表", "空数组"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "parameterized-database-query",
+      "prompt": "修复下面的公开代码问题。只输出一个 JSON 对象，顶层键必须是 files、changes、tests、rollback；四个键的值都必须是数组。changes 中给出最小代码修改，不要添加第三方依赖。",
+      "context": "Python 数据库代码使用 `cursor.execute(f\"SELECT * FROM users WHERE email = '{email}'\")`。要求消除 SQL 注入风险并给出针对恶意输入的测试。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["files", "changes", "tests", "rollback"]},
+        {"type": "contains_any", "values": ["参数化", "占位符", "parameterized"]},
+        {"type": "contains_any", "values": ["注入", "恶意输入", "SQL"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "atomic-json-state-write",
+      "prompt": "实现下面的公开可靠性要求。只输出一个 JSON 对象，顶层键必须是 files、changes、tests、rollback；四个键的值都必须是数组。changes 中给出最小代码修改，不要添加第三方依赖。",
+      "context": "Python 服务直接覆盖 state.json，进程中途退出时会留下半个 JSON。要求使用同目录临时文件、落盘同步和原子替换，并验证失败时旧文件仍可读。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["files", "changes", "tests", "rollback"]},
+        {"type": "contains_any", "values": ["临时文件", "temp", "NamedTemporaryFile"]},
+        {"type": "contains_any", "values": ["fsync", "落盘", "同步"]},
+        {"type": "contains_any", "values": ["os.replace", "原子替换", "replace"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "bounded-http-retry",
+      "prompt": "实现下面的公开可靠性要求。只输出一个 JSON 对象，顶层键必须是 files、changes、tests、rollback；四个键的值都必须是数组。changes 中给出最小代码修改，不要添加第三方依赖。",
+      "context": "HTTP 调用失败后当前代码会无限立即重试。要求限制重试次数，对 429 和临时服务错误使用退避，永久性客户端错误不重试，并给出确定性测试。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["files", "changes", "tests", "rollback"]},
+        {"type": "contains_any", "values": ["最大", "次数", "bounded", "max_retries"]},
+        {"type": "contains_any", "values": ["退避", "backoff", "Retry-After"]},
+        {"type": "contains_any", "values": ["429", "客户端错误", "4xx"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "configuration-validation",
+      "prompt": "实现下面的公开配置校验。只输出一个 JSON 对象，顶层键必须是 files、changes、tests、rollback；四个键的值都必须是数组。changes 中给出最小代码修改，不要添加第三方依赖。",
+      "context": "应用从 JSON 读取 port 和 api_url。要求启动前拒绝缺失 api_url、非 HTTP(S) URL，以及不在 1 到 65535 范围内的整数端口；错误信息要指出字段。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["files", "changes", "tests", "rollback"]},
+        {"type": "contains_any", "values": ["65535", "1 到 65535", "1-65535"]},
+        {"type": "contains_any", "values": ["http", "https", "URL"]},
+        {"type": "contains_any", "values": ["缺失", "required", "必填"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    }
+  ]
+}

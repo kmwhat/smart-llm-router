@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#ffffff"/>
+  <rect x="40" y="40" width="560" height="280" fill="#f3f4f6" stroke="#111827" stroke-width="4"/>
+  <text x="320" y="155" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#111827">DOUBAO 2026</text>
+  <text x="320" y="225" text-anchor="middle" font-family="Arial, sans-serif" font-size="38" fill="#b91c1c">VISION OK</text>
+</svg>

@@ -1,0 +1,85 @@
+{
+  "schema": "smart_llm_router.public_engineering_plan.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "planner": {
+    "type": "codex_controller",
+    "reason": "qwen3.7-max timed out and kimi-k3 returned HTTP 400 after a local budget-gate retry with compressed input"
+  },
+  "objective": "Make quality_target a shared, fail-closed minimum role-quality floor while choosing the lowest reliable cost among models that satisfy it.",
+  "success_criteria": {
+    "quality_floor": "draft, production, audit, and frontier enforce minimum role bands 2, 3, 4, and 4; lower or unregistered models do not enter role routes",
+    "cost_order": "after the quality floor, order by route health, budget eligibility, free status, retry-adjusted cost, P95 latency, and quality surplus",
+    "surface_consistency": "recommend_route, route_plan, build_workflow_plan, and run_llm_task share one role-policy helper",
+    "tests": "focused tests plus the complete suite, compileall, and git diff --check pass",
+    "budget": "total model cost stays below USD 0.05 and failed early gates stop later calls",
+    "security": "no credentials or private user data enter artifacts and Hermes unattended safety is unchanged"
+  },
+  "design": {
+    "role_band_source": "smart_llm_router/router.py:ROLE_QUALITY_BANDS",
+    "minimum_role_quality_band": {
+      "draft": 2,
+      "production": 3,
+      "audit": 4,
+      "frontier": 4
+    },
+    "eligibility": [
+      "Role tasks admit only models explicitly registered in ROLE_QUALITY_BANDS at or above the target floor.",
+      "A role task never falls back to an unregistered general-pool model when no qualified role model exists.",
+      "Existing privacy, modality, cooldown, provider entitlement, and max-cost gates remain hard constraints."
+    ],
+    "ordering": [
+      "non-degraded route before degraded route when enough task-specific health evidence exists",
+      "budget-eligible before budget-ineligible",
+      "free before paid",
+      "lower retry-adjusted expected cost",
+      "lower successful-call P95 latency",
+      "higher quality surplus above the required floor",
+      "existing stable role order as the penultimate tie-breaker only when every earlier key ties",
+      "provider priority as the final deterministic tie-breaker only when every earlier key ties"
+    ],
+    "shared_surfaces": [
+      "recommend_route",
+      "route_plan role pipeline",
+      "build_workflow_plan through route_plan",
+      "run_llm_task"
+    ]
+  },
+  "files": [
+    "smart_llm_router/router.py",
+    "tests/test_role_routing.py",
+    "tests/test_route_stats.py",
+    "tests/test_workflow_governance.py",
+    "README.md",
+    "codex-skill/smart-llm-router/SKILL.md",
+    "codex-skill/hermes-smart-llm-router/SKILL.md",
+    "hermes-skill/model-routing-foundation/SKILL.md"
+  ],
+  "tests": [
+    "draft verification selects the registered band-2 trial route and excludes unregistered general models",
+    "production verification rejects the band-2 route and selects a band-3-or-higher route",
+    "frontier planning rejects band-3 routes even when they are free",
+    "production may select a healthy free band-3 route ahead of a paid band-4 route because both meet the floor",
+    "recommend, route-plan, workflow-plan, and run_llm_task expose the same floor and selection result",
+    "a direct run_llm_task integration test selects the same qualified route as planning and raises a clear runtime failure when no route meets the floor",
+    "existing degraded-route, privacy, budget, family-independence, and full-suite tests remain green"
+    ,
+    "no qualified role route returns an empty recommendation or clear runtime failure without falling back to an unregistered general model",
+    "existing role order and provider priority remain deterministic final tie-breakers when all earlier sort keys tie"
+  ],
+  "risks": [
+    "Changing the sort order can alter production model choices; focused route-order tests and live dry-runs are required.",
+    "A strict floor can leave no eligible route; this is intentional fail-closed behavior and must be visible in output.",
+    "Free trial routes can disappear; health and cooldown remain ahead of free preference."
+  ],
+  "rollback": [
+    "Remove the quality-target floor map and quality_target parameter from the role-policy helper.",
+    "Restore the previous highest-band-first sort and production-only role-policy call sites.",
+    "Keep the public workflow artifacts as evidence even if code is rolled back."
+  ],
+  "acceptance": [
+    "quality_floor, cost_order, surface_consistency, tests, budget, and security all pass.",
+    "No new dependency, service, credential, or model promotion is introduced.",
+    "The complete project test suite, compileall, and git diff --check pass.",
+    "A final independent verifier judges the implementation against the original contract."
+  ]
+}

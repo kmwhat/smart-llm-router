@@ -1,0 +1,73 @@
+{
+  "schema": "smart_llm_router.public_execution_routing_evidence.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "created_at": "2026-07-18T12:34:53Z",
+  "attempts": [
+    {
+      "stage": "plan_design",
+      "provider": "qwen",
+      "model": "qwen3.7-max",
+      "result": "timeout",
+      "ledger_id": "f0eac025dc860cb7",
+      "charged_cost_usd": 0.0,
+      "action": "stopped route and switched model family"
+    },
+    {
+      "stage": "plan_design",
+      "provider": "kimi",
+      "model": "kimi-k3",
+      "result": "http_400_after_budget_compression",
+      "charged_cost_usd": 0.0,
+      "action": "stopped model calls and used the Codex controller to freeze the minimal plan"
+    },
+    {
+      "stage": "plan_audit",
+      "provider": "gemini-free",
+      "model": "gemini-2.5-pro",
+      "result": "pass_after_two_blocking_reviews",
+      "ledger_ids": [
+        "82fb08f0426008e7",
+        "cc356c6914bbd6cf",
+        "cf62e3ad32304782"
+      ],
+      "charged_cost_usd": 0.0,
+      "action": "approved exact implementation scope"
+    },
+    {
+      "stage": "execute",
+      "provider": "glm",
+      "model": "glm-5.2",
+      "result": "timeout",
+      "charged_cost_usd": 0.0,
+      "action": "cooled the failed route and continued with local Codex execution"
+    },
+    {
+      "stage": "execute",
+      "provider": "doubao",
+      "model": "code-capable route",
+      "result": "blocked_unknown_price",
+      "charged_cost_usd": 0.0,
+      "action": "failed closed at the budget gate"
+    },
+    {
+      "stage": "final_verify",
+      "provider": "deepseek-direct-paid",
+      "model": "deepseek-v4-pro",
+      "result": "empty_response",
+      "charged_cost_usd": 0.0,
+      "action": "stopped the route and switched to a healthy free band-4 verifier"
+    },
+    {
+      "stage": "final_verify",
+      "provider": "gemini-free",
+      "model": "gemini-2.5-pro",
+      "result": "pass",
+      "ledger_id": "f3d983a3da5989bb",
+      "charged_cost_usd": 0.0,
+      "action": "approved merge and deployment with no blocking findings"
+    }
+  ],
+  "successful_model_cost_usd": 0.0,
+  "conservative_failed_request_bound_usd": 0.05,
+  "budget_note": "The conservative bound reserves one maximum 0.015 USD stage charge for each failed Qwen, Kimi, and GLM attempt plus the 0.005 USD DeepSeek verification cap, even though no charged cost was reported."
+}

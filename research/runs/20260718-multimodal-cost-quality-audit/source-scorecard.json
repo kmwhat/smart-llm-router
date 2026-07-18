@@ -1,0 +1,15 @@
+{
+  "date": "2026-07-18",
+  "sources": [
+    {"provider": "Alibaba Model Studio", "officialness": 5, "freshness": 5, "capability_detail": 5, "pricing_detail": 5},
+    {"provider": "Zhipu BigModel", "officialness": 5, "freshness": 5, "capability_detail": 5, "pricing_detail": 3},
+    {"provider": "DeepSeek", "officialness": 5, "freshness": 5, "capability_detail": 4, "pricing_detail": 5},
+    {"provider": "Google Gemini", "officialness": 5, "freshness": 5, "capability_detail": 5, "pricing_detail": 5},
+    {"provider": "OpenRouter", "officialness": 5, "freshness": 5, "capability_detail": 5, "pricing_detail": 5},
+    {"provider": "Groq", "officialness": 5, "freshness": 5, "capability_detail": 4, "pricing_detail": 5},
+    {"provider": "Kimi", "officialness": 5, "freshness": 4, "capability_detail": 4, "pricing_detail": 4},
+    {"provider": "NVIDIA NIM", "officialness": 5, "freshness": 5, "capability_detail": 4, "pricing_detail": 2},
+    {"provider": "Volcano Ark", "officialness": 5, "freshness": 4, "capability_detail": 4, "pricing_detail": 3}
+  ],
+  "scale": "1 low, 5 high"
+}

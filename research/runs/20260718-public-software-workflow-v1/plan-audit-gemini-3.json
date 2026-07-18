@@ -1,0 +1,34 @@
+{
+  "schema": "smart_llm_router.public_plan_audit.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "reviewer": {
+    "provider": "gemini-free",
+    "model": "gemini-2.5-pro",
+    "ledger_id": "cf62e3ad32304782"
+  },
+  "decision": "pass",
+  "resolved": [
+    "All six workflow acceptance criteria are expanded in the plan.",
+    "Stable role order and provider priority are explicit final tie-breakers.",
+    "The ROLE_QUALITY_BANDS module location is explicit.",
+    "No-qualified-route fail-closed coverage is required.",
+    "Deterministic final tie-breaker coverage is required.",
+    "Direct run_llm_task consistency and fail-closed integration coverage is required."
+  ],
+  "blocking_issues": [],
+  "approved_files": [
+    "smart_llm_router/router.py",
+    "tests/test_role_routing.py",
+    "tests/test_route_stats.py",
+    "tests/test_workflow_governance.py",
+    "README.md",
+    "codex-skill/smart-llm-router/SKILL.md",
+    "codex-skill/hermes-smart-llm-router/SKILL.md",
+    "hermes-skill/model-routing-foundation/SKILL.md"
+  ],
+  "residual_risks": [
+    "Production model choices can change and require targeted dry-run comparison.",
+    "A strict quality floor can intentionally leave no eligible route.",
+    "Health and cooldown must remain ahead of free preference."
+  ]
+}

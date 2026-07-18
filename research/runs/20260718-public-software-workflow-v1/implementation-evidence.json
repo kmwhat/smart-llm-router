@@ -1,0 +1,53 @@
+{
+  "schema": "smart_llm_router.public_implementation_evidence.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "created_at": "2026-07-18T12:34:53Z",
+  "implementation": {
+    "quality_floors": {
+      "draft": 2,
+      "production": 3,
+      "audit": 4,
+      "frontier": 4
+    },
+    "selection_order": [
+      "not_degraded",
+      "budget_eligible",
+      "free",
+      "retry_adjusted_expected_cost",
+      "successful_p95_latency",
+      "higher_quality_surplus",
+      "stable_role_order",
+      "provider_priority"
+    ],
+    "surfaces": [
+      "recommend_route",
+      "route_plan",
+      "workflow_plan via role pipeline",
+      "run_llm_task"
+    ],
+    "fail_closed": "Role routes do not fall back to unregistered general-pool models when no candidate meets the quality floor."
+  },
+  "changed_files": [
+    "smart_llm_router/router.py",
+    "tests/test_role_routing.py",
+    "tests/test_workflow_governance.py",
+    "README.md",
+    "codex-skill/smart-llm-router/SKILL.md",
+    "codex-skill/hermes-smart-llm-router/SKILL.md",
+    "hermes-skill/model-routing-foundation/SKILL.md"
+  ],
+  "approved_unchanged_file": "tests/test_route_stats.py",
+  "validation": {
+    "unittest": "67 passed",
+    "compileall": "passed",
+    "diff_check": "passed with no whitespace errors",
+    "direct_execution_coverage": "run_llm_task quality-floor consistency and no-qualified-route fail-closed behavior are covered"
+  },
+  "scope_changes": [],
+  "security": {
+    "credentials_changed": false,
+    "hermes_unattended_gate_changed": false,
+    "new_dependency_added": false,
+    "private_data_in_artifacts": false
+  }
+}

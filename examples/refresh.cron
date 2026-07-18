@@ -1,0 +1,2 @@
+# Run every 6 hours. Replace /path/to/smart-llm-router.
+0 */6 * * * cd /path/to/smart-llm-router && .venv/bin/smart-llm-router refresh --timeout 6 --limit 8 >> ~/.smart-llm-router/refresh.log 2>&1

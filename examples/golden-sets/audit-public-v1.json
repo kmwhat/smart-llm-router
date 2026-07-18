@@ -1,0 +1,93 @@
+{
+  "schema": "smart_llm_router.golden_suite.v1",
+  "suite_id": "audit-public-v1",
+  "description": "Public synthetic audit cases for screening newly discovered low-cost models before any explicit role-band registration.",
+  "task": "audit",
+  "proposed_role": "audit",
+  "proposed_quality_band": 2,
+  "quality_target": "draft",
+  "privacy": "external_allowed",
+  "thresholds": {
+    "min_cases": 5,
+    "min_case_pass_rate": 0.8,
+    "max_baseline_case_regression": 0.2,
+    "max_candidate_cost_usd": 0.000001,
+    "max_call_cost_usd": 0.01,
+    "min_health_samples": 3,
+    "baseline_required": true,
+    "independent_review_required": true,
+    "min_candidate_review_pass_rate": 0.8,
+    "min_candidate_win_or_tie_rate": 0.8,
+    "max_candidate_losses": 1
+  },
+  "rubric": [
+    "Correctly identifies the material risks present in the supplied facts.",
+    "Does not invent facts, incidents, systems, or requirements absent from the case.",
+    "Recommendations are concrete, testable, and proportional to the risk.",
+    "Output is concise enough to support an execution decision."
+  ],
+  "cases": [
+    {
+      "id": "deployment-without-rollback",
+      "prompt": "审计下面的公开部署方案。只输出一个 JSON 对象，顶层键必须是 issues、risk_level、recommendations。issues 和 recommendations 必须是数组。",
+      "context": "团队计划周五晚上把全部用户一次性切换到新服务。方案只有部署步骤，没有灰度、回滚条件、监控指标、负责人和验收标准。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["issues", "risk_level", "recommendations"]},
+        {"type": "contains_any", "values": ["回滚", "回退"]},
+        {"type": "contains_any", "values": ["监控", "验收"]},
+        {"type": "max_chars", "value": 3000}
+      ]
+    },
+    {
+      "id": "authorization-by-query-id",
+      "prompt": "审计下面的公开接口设计。只输出一个 JSON 对象，顶层键必须是 issues、risk_level、recommendations。issues 和 recommendations 必须是数组。",
+      "context": "管理接口根据 URL 查询参数 user_id 判断操作对象。只要调用方已登录，就能提交任意 user_id；服务端没有再次校验调用方是否有权管理该用户。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["issues", "risk_level", "recommendations"]},
+        {"type": "contains_any", "values": ["鉴权", "授权", "权限"]},
+        {"type": "contains_any", "values": ["服务端", "越权"]},
+        {"type": "max_chars", "value": 3000}
+      ]
+    },
+    {
+      "id": "destructive-database-migration",
+      "prompt": "审计下面的公开数据库迁移计划。只输出一个 JSON 对象，顶层键必须是 issues、risk_level、recommendations。issues 和 recommendations 必须是数组。",
+      "context": "迁移脚本会删除旧字段并立刻重建索引。计划没有备份验证、兼容期、恢复演练、锁表时间评估和失败后的停止条件。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["issues", "risk_level", "recommendations"]},
+        {"type": "contains_any", "values": ["备份", "恢复"]},
+        {"type": "contains_any", "values": ["回滚", "停止条件", "兼容"]},
+        {"type": "max_chars", "value": 3000}
+      ]
+    },
+    {
+      "id": "uncontrolled-llm-workflow",
+      "prompt": "审计下面的公开 AI 工作流方案。只输出一个 JSON 对象，顶层键必须是 issues、risk_level、recommendations。issues 和 recommendations 必须是数组。",
+      "context": "自动化会把原始聊天、图片和长日志直接发送给一个云模型。没有隐私分类、预算上限、目标验收、过程检查、失败冷却或独立复验。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["issues", "risk_level", "recommendations"]},
+        {"type": "contains_any", "values": ["隐私", "敏感"]},
+        {"type": "contains_any", "values": ["预算", "成本"]},
+        {"type": "contains_any", "values": ["复验", "检查", "漂移"]},
+        {"type": "max_chars", "value": 3000}
+      ]
+    },
+    {
+      "id": "incomplete-incident-review",
+      "prompt": "审计下面的公开事故复盘。只输出一个 JSON 对象，顶层键必须是 issues、risk_level、recommendations。issues 和 recommendations 必须是数组。",
+      "context": "复盘只写了服务已经恢复和以后要更小心。没有时间线、影响范围、证据、根因、纠正措施负责人、截止时间和复发验证。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["issues", "risk_level", "recommendations"]},
+        {"type": "contains_any", "values": ["根因", "原因"]},
+        {"type": "contains_any", "values": ["负责人", "责任人"]},
+        {"type": "contains_any", "values": ["时间线", "影响范围"]},
+        {"type": "max_chars", "value": 3000}
+      ]
+    }
+  ]
+}

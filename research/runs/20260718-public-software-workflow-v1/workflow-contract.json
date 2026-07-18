@@ -1,0 +1,55 @@
+{
+  "schema": "hermes_router_hub.workflow_contract.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "objective": "让角色路由的 quality_target 成为可执行质量下限：draft 至少二档、production 至少三档、audit 和 frontier 必须四档；达到质量下限后优先健康、免费和最低重试调整成本，且 recommend、route-plan 与真实 task 调用共享同一规则。",
+  "task_type": "execute",
+  "domain": "general",
+  "risk": "high",
+  "quality_target": "frontier",
+  "privacy": "external_allowed",
+  "paid_allowed": true,
+  "workflow_budget_usd": 0.05,
+  "max_stage_cost_usd": 0.015,
+  "max_conditional_checks": 1,
+  "automation_mode": "manual_controlled",
+  "hermes_security_approved": false,
+  "success_criteria": [
+    {
+      "id": "quality_floor",
+      "text": "draft、production、audit、frontier 分别执行 2、3、4、4 的最低角色质量档，低于门槛或未登记模型不进入角色路线"
+    },
+    {
+      "id": "cost_order",
+      "text": "达到质量下限后按路线健康、免费、重试调整成本、P95 延迟和质量余量排序，避免为不需要的更高档付费"
+    },
+    {
+      "id": "surface_consistency",
+      "text": "recommend、route-plan、workflow-plan 和 run_llm_task 使用同一角色质量规则"
+    },
+    {
+      "id": "tests",
+      "text": "新增聚焦测试并保证项目完整自动化测试、compileall 和 git diff --check 通过"
+    },
+    {
+      "id": "budget",
+      "text": "累计模型估算成本不超过 0.05 美元，早期关卡失败时停止后续模型调用"
+    },
+    {
+      "id": "security",
+      "text": "任务材料不含 API Key、私密配置或真实用户数据，且不改变 Hermes 无人值守安全门"
+    }
+  ],
+  "constraints": [
+    "规划审计通过前不得修改生产代码",
+    "复用现有 ROLE_QUALITY_BANDS、健康账本、预算和冷却机制",
+    "每个阶段只调用一个主模型，失败才切换不同路线",
+    "范围变化必须先进入本地过程检查点",
+    "最终交付必须从原始目标和全部验收标准独立复验"
+  ],
+  "non_goals": [
+    "不新增在线服务、数据库或第三方依赖",
+    "不自动晋级任何新的模型质量档",
+    "不修改 API Key、Provider 凭据或 Hermes 内部会话模型",
+    "不把本次公开任务扩展成通用学习型或多臂老虎机路由器"
+  ]
+}

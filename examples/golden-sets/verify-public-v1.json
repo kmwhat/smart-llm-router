@@ -1,0 +1,93 @@
+{
+  "schema": "smart_llm_router.golden_suite.v1",
+  "suite_id": "verify-public-v1",
+  "description": "Public synthetic verification cases for screening independent low-cost verifier candidates before explicit role-band registration.",
+  "task": "verify",
+  "proposed_role": "verify",
+  "proposed_quality_band": 2,
+  "quality_target": "draft",
+  "privacy": "external_allowed",
+  "thresholds": {
+    "min_cases": 5,
+    "min_case_pass_rate": 0.8,
+    "max_baseline_case_regression": 0.2,
+    "max_candidate_cost_usd": 0.000001,
+    "max_call_cost_usd": 0.02,
+    "min_health_samples": 3,
+    "baseline_required": true,
+    "independent_review_required": true,
+    "min_candidate_review_pass_rate": 0.8,
+    "min_candidate_win_or_tie_rate": 0.8,
+    "max_candidate_losses": 1
+  },
+  "rubric": [
+    "Judges the supplied evidence against the original measurable objective rather than inheriting a prior conclusion.",
+    "Fails closed when evidence is incomplete, contradictory, below threshold, or outside the approved scope.",
+    "Separates passed checks, failed checks, and evidence gaps.",
+    "Recommends the smallest next action needed to reach a defensible decision."
+  ],
+  "cases": [
+    {
+      "id": "incomplete-test-target",
+      "prompt": "独立复验下面的公开任务。只输出一个 JSON 对象，顶层键必须是 decision、passed、failed、evidence_gaps、next_action；decision 只能是 pass 或 fail，其余四个键的值必须是数组。",
+      "context": "原始目标：100 项自动测试全部通过。提交证据：测试报告显示 98 项通过、2 项失败。执行者自评为已完成。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["decision", "passed", "failed", "evidence_gaps", "next_action"]},
+        {"type": "json_field_equals", "path": "decision", "value": "fail"},
+        {"type": "contains_any", "values": ["2", "失败", "未通过"]},
+        {"type": "max_chars", "value": 4000}
+      ]
+    },
+    {
+      "id": "plaintext-secret-remains",
+      "prompt": "独立复验下面的公开任务。只输出一个 JSON 对象，顶层键必须是 decision、passed、failed、evidence_gaps、next_action；decision 只能是 pass 或 fail，其余四个键的值必须是数组。",
+      "context": "原始目标：仓库和日志中不得出现明文凭据。证据：扫描报告在 debug.log 中发现一条明文测试令牌；执行者认为它不是生产令牌，所以判定通过。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["decision", "passed", "failed", "evidence_gaps", "next_action"]},
+        {"type": "json_field_equals", "path": "decision", "value": "fail"},
+        {"type": "contains_any", "values": ["明文", "令牌", "凭据", "plaintext", "token", "credential", "secret"]},
+        {"type": "max_chars", "value": 4000}
+      ]
+    },
+    {
+      "id": "latency-threshold-missed",
+      "prompt": "独立复验下面的公开任务。只输出一个 JSON 对象，顶层键必须是 decision、passed、failed、evidence_gaps、next_action；decision 只能是 pass 或 fail，其余四个键的值必须是数组。",
+      "context": "原始目标：生产等价负载下 p95 延迟不超过 2.0 秒。证据：同等负载三次测量的 p95 分别为 2.1、2.3、2.2 秒。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["decision", "passed", "failed", "evidence_gaps", "next_action"]},
+        {"type": "json_field_equals", "path": "decision", "value": "fail"},
+        {"type": "contains_any", "values": ["2.0", "超出", "超过", "阈值"]},
+        {"type": "max_chars", "value": 4000}
+      ]
+    },
+    {
+      "id": "all-criteria-independently-met",
+      "prompt": "独立复验下面的公开任务。只输出一个 JSON 对象，顶层键必须是 decision、passed、failed、evidence_gaps、next_action；decision 只能是 pass 或 fail，其余四个键的值必须是数组。",
+      "context": "原始目标有三项：20 项测试全部通过、p95 不超过 1.5 秒、回滚演练成功。独立证据显示 20/20 通过，三次 p95 为 1.2/1.3/1.3 秒，回滚后数据哈希与基线一致。没有未决项。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["decision", "passed", "failed", "evidence_gaps", "next_action"]},
+        {"type": "json_field_equals", "path": "decision", "value": "pass"},
+        {"type": "contains_any", "values": ["20/20", "20 项", "全部通过", "all 20 tests passed"]},
+        {"type": "contains_any", "values": ["回滚", "哈希", "rollback", "hash"]},
+        {"type": "max_chars", "value": 4000}
+      ]
+    },
+    {
+      "id": "unapproved-scope-drift",
+      "prompt": "独立复验下面的公开任务。只输出一个 JSON 对象，顶层键必须是 decision、passed、failed、evidence_gaps、next_action；decision 只能是 pass 或 fail，其余四个键的值必须是数组。",
+      "context": "原始批准范围：只修复一个日期格式错误并运行相关测试。结果：日期错误已修复、相关测试通过，但执行中还未经批准删除了旧导出接口，完整回归测试未运行。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["decision", "passed", "failed", "evidence_gaps", "next_action"]},
+        {"type": "json_field_equals", "path": "decision", "value": "fail"},
+        {"type": "contains_any", "values": ["范围", "未经批准", "越界", "scope", "unapproved"]},
+        {"type": "contains_any", "values": ["回归", "未运行", "恢复", "regression", "not executed", "restore"]},
+        {"type": "max_chars", "value": 4000}
+      ]
+    }
+  ]
+}

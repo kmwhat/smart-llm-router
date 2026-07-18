@@ -1,0 +1,30 @@
+# Official Source Pack
+
+- Alibaba Model Studio pricing: https://help.aliyun.com/en/model-studio/model-pricing
+- Alibaba embedding and multimodal embedding: https://help.aliyun.com/en/model-studio/embedding
+- Alibaba knowledge-base rerank guidance: https://help.aliyun.com/en/model-studio/rag-knowledge-base
+- Zhipu model overview: https://docs.bigmodel.cn/cn/guide/start/model-overview
+- Zhipu quick start and cost guidance: https://docs.bigmodel.cn/cn/guide/start/quick-start
+- DeepSeek models and pricing: https://api-docs.deepseek.com/quick_start/pricing
+- DeepSeek model listing: https://api-docs.deepseek.com/api/list-models
+- Gemini model catalog: https://ai.google.dev/gemini-api/docs/models
+- Gemini pricing: https://ai.google.dev/gemini-api/docs/pricing
+- Gemini billing tiers and paid opt-in: https://ai.google.dev/gemini-api/docs/billing
+- OpenRouter model metadata and price filters: https://openrouter.ai/docs/guides/overview/models
+- OpenRouter free router: https://openrouter.ai/docs/guides/routing/routers/free-router
+- OpenRouter free limits: https://openrouter.ai/docs/api/reference/limits
+- Groq speech-to-text: https://console.groq.com/docs/speech-to-text
+- Kimi model list: https://platform.kimi.ai/docs/models
+- Kimi Moonshot V1 pricing: https://platform.kimi.com/docs/pricing/chat-v1
+- Kimi vision models: https://platform.kimi.com/docs/guide/use-kimi-vision-model
+- NVIDIA NIM model catalog example: https://build.nvidia.com/nvidia/llama-3_3-nemotron-super-49b-v1
+- Volcano Ark model list: https://www.volcengine.com/docs/82379/1554711
+- Volcano Ark current product pricing and free quotas: https://www.volcengine.com/product/ark
+- Volcano Ark quick start and Responses API model examples: https://www.volcengine.com/docs/82379/1795150
+- Volcano Ark foundation-model version API: https://api.volcengine.com/api-explorer/?action=ListFoundationModelVersions&groupName=%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9E%8B&serviceCode=ark&version=2024-01-01
+- Volcano Ark Coding Plan/OpenAI route separation: https://www.volcengine.com/docs/82379/2205646
+- Zhipu GLM-5.2 model guide: https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2
+- Zhipu current pricing: https://bigmodel.cn/pricing
+- Kimi K3 launch and pricing: https://www.kimi.com/fr-fr/blog/kimi-k3
+- Kimi current China API model pricing: https://platform.kimi.com/
+- Z.AI current model pricing, including free GLM Flash routes: https://docs.z.ai/guides/overview/pricing

@@ -1,0 +1,19 @@
+{
+  "schema": "hermes_router_hub.workflow_checkpoint.v1",
+  "workflow_id": "wf-smart-router-v1",
+  "stage": "execute",
+  "objective_alignment": "aligned",
+  "evidence": [
+    "unit_tests:pass",
+    "dry_run:pass",
+    "git_diff:reviewed"
+  ],
+  "scope_changes": [],
+  "criterion_status": {
+    "tests": "pass",
+    "scope": "pass",
+    "budget": "pass",
+    "security": "pass"
+  },
+  "spent_usd": 0.01
+}

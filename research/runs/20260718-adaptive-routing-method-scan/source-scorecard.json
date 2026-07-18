@@ -1,0 +1,64 @@
+{
+  "research_date": "2026-07-18",
+  "scale": "1 is weak, 5 is strong; integration_cost is reversed so 5 means easy to integrate",
+  "criteria": [
+    "officialness",
+    "activity",
+    "license_clarity",
+    "privacy_fit",
+    "security_posture",
+    "personal_scale_fit",
+    "integration_cost",
+    "reversibility"
+  ],
+  "candidates": [
+    {
+      "name": "LiteLLM routing methods",
+      "scores": [5, 5, 2, 3, 4, 3, 3, 5],
+      "total": 30,
+      "decision": "adapt health, latency, cooldown, and budget ideas; do not replace runtime"
+    },
+    {
+      "name": "vLLM Semantic Router",
+      "scores": [5, 5, 5, 4, 4, 2, 1, 3],
+      "total": 29,
+      "decision": "adapt signal-decision architecture; reject heavy local deployment"
+    },
+    {
+      "name": "RouteLLM",
+      "scores": [5, 2, 5, 4, 4, 3, 2, 4],
+      "total": 29,
+      "decision": "adapt preference-based evaluation and strong-weak comparison"
+    },
+    {
+      "name": "Promptfoo",
+      "scores": [5, 5, 5, 3, 4, 4, 3, 5],
+      "total": 34,
+      "decision": "candidate for isolated golden-set evaluation; do not install globally now"
+    },
+    {
+      "name": "Portkey AI Gateway",
+      "scores": [5, 4, 5, 3, 4, 2, 2, 4],
+      "total": 29,
+      "decision": "reject duplicate gateway surface"
+    },
+    {
+      "name": "ParetoBandit",
+      "scores": [4, 4, 5, 4, 3, 2, 1, 4],
+      "total": 27,
+      "decision": "defer until enough labeled observations exist"
+    },
+    {
+      "name": "LLMRouterBench",
+      "scores": [5, 4, 1, 5, 4, 4, 2, 5],
+      "total": 30,
+      "decision": "adopt benchmark discipline and simple-baseline control"
+    },
+    {
+      "name": "ulab-uiuc LLMRouter",
+      "scores": [4, 5, 5, 4, 3, 2, 1, 4],
+      "total": 28,
+      "decision": "research sandbox reference only"
+    }
+  ]
+}

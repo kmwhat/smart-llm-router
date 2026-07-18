@@ -1,0 +1,39 @@
+{
+  "schema": "smart_llm_router.public_final_verification.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "reviewer": {
+    "provider": "gemini-free",
+    "model": "gemini-2.5-pro",
+    "ledger_id": "f3d983a3da5989bb",
+    "independent_from_executor": true
+  },
+  "decision": "pass",
+  "criterion_status": {
+    "quality_floor": "pass",
+    "cost_order": "pass",
+    "surface_consistency": "pass",
+    "tests": "pass",
+    "budget": "pass",
+    "security": "pass"
+  },
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "id": "NBF-1",
+      "finding": "tests/test_route_stats.py was approved for possible change but remained unchanged; implementation evidence records it as approved_unchanged_file."
+    }
+  ],
+  "evidence_gaps": [],
+  "reported_scope_drift": [
+    {
+      "id": "SD-1",
+      "finding": "The verifier initially described budget eligibility as an accepted scope optimization."
+    }
+  ],
+  "scope_drift_adjudication": {
+    "decision": "not_scope_drift",
+    "evidence": "plan-design.json explicitly defines budget eligibility in cost_order and in the stable selection sequence before implementation."
+  },
+  "objective_alignment": "aligned",
+  "next_action": "Approve minimal production synchronization, then rerun the complete suite and dry-run route checks in the production tree."
+}

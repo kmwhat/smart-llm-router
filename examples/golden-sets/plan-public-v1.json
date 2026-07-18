@@ -1,0 +1,96 @@
+{
+  "schema": "smart_llm_router.golden_suite.v1",
+  "suite_id": "plan-public-v1",
+  "description": "Public synthetic planning cases for screening low-cost planner candidates before explicit role-band registration.",
+  "task": "plan",
+  "proposed_role": "plan",
+  "proposed_quality_band": 2,
+  "quality_target": "draft",
+  "privacy": "external_allowed",
+  "thresholds": {
+    "min_cases": 5,
+    "min_case_pass_rate": 0.8,
+    "max_baseline_case_regression": 0.2,
+    "max_candidate_cost_usd": 0.000001,
+    "max_call_cost_usd": 0.01,
+    "min_health_samples": 3,
+    "baseline_required": true,
+    "independent_review_required": true,
+    "min_candidate_review_pass_rate": 0.8,
+    "min_candidate_win_or_tie_rate": 0.8,
+    "max_candidate_losses": 1
+  },
+  "rubric": [
+    "Restates the objective and constraints without inventing requirements.",
+    "Orders concrete steps by dependency and exposes checkpoints before expensive or irreversible work.",
+    "Defines measurable acceptance criteria, material risks, and a usable rollback path.",
+    "Keeps the plan concise enough for execution and independent review."
+  ],
+  "cases": [
+    {
+      "id": "service-migration-rollout",
+      "prompt": "为下面的公开任务制定执行计划。只输出一个 JSON 对象，顶层键必须是 objective、constraints、steps、acceptance、risks、rollback；constraints、steps、acceptance、risks 必须是数组。",
+      "context": "把现有用户从旧服务迁移到新服务。必须保持可用，不能一次性全量切换；计划要包含灰度、观察、停止条件和回退。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["objective", "constraints", "steps", "acceptance", "risks", "rollback"]},
+        {"type": "contains_any", "values": ["灰度", "分批", "小流量"]},
+        {"type": "contains_any", "values": ["回滚", "回退"]},
+        {"type": "contains_any", "values": ["监控", "观察", "指标"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "database-schema-migration",
+      "prompt": "为下面的公开任务制定执行计划。只输出一个 JSON 对象，顶层键必须是 objective、constraints、steps、acceptance、risks、rollback；constraints、steps、acceptance、risks 必须是数组。",
+      "context": "把生产数据库中的旧字段迁移为新结构。业务不能长时间停机，旧版本应用需要短期兼容；必须先验证备份可恢复，再逐步迁移。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["objective", "constraints", "steps", "acceptance", "risks", "rollback"]},
+        {"type": "contains_any", "values": ["备份", "快照"]},
+        {"type": "contains_any", "values": ["恢复", "回滚", "回退"]},
+        {"type": "contains_any", "values": ["兼容", "双写", "分批"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "third-party-api-integration",
+      "prompt": "为下面的公开任务制定执行计划。只输出一个 JSON 对象，顶层键必须是 objective、constraints、steps、acceptance、risks、rollback；constraints、steps、acceptance、risks 必须是数组。",
+      "context": "接入一个外部支付状态查询 API。外部接口有速率限制并可能超时，重复请求不能导致重复业务动作；上线前需要可测试的失败处理。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["objective", "constraints", "steps", "acceptance", "risks", "rollback"]},
+        {"type": "contains_any", "values": ["超时", "timeout"]},
+        {"type": "contains_any", "values": ["重试", "退避", "限流"]},
+        {"type": "contains_any", "values": ["幂等", "重复"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "cost-controlled-ai-automation",
+      "prompt": "为下面的公开任务制定执行计划。只输出一个 JSON 对象，顶层键必须是 objective、constraints、steps、acceptance、risks、rollback；constraints、steps、acceptance、risks 必须是数组。",
+      "context": "建设一个低成本 AI 自动化流程：低价值任务优先本地或免费模型，高风险任务才升级付费模型。必须先做隐私分类、预算约束、过程检查和最终目标复验。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["objective", "constraints", "steps", "acceptance", "risks", "rollback"]},
+        {"type": "contains_any", "values": ["隐私", "敏感"]},
+        {"type": "contains_any", "values": ["预算", "成本"]},
+        {"type": "contains_any", "values": ["检查点", "复验", "验收", "漂移"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    },
+    {
+      "id": "feature-release-acceptance",
+      "prompt": "为下面的公开任务制定执行计划。只输出一个 JSON 对象，顶层键必须是 objective、constraints、steps、acceptance、risks、rollback；constraints、steps、acceptance、risks 必须是数组。",
+      "context": "发布一个新的批量导入功能。范围只包含 CSV 导入和错误报告，不包含在线编辑；依赖现有权限系统，并要求上线前有可量化验收和上线后观察。",
+      "assertions": [
+        {"type": "valid_json"},
+        {"type": "json_required_keys", "values": ["objective", "constraints", "steps", "acceptance", "risks", "rollback"]},
+        {"type": "contains_any", "values": ["CSV", "csv"]},
+        {"type": "contains_any", "values": ["权限", "授权"]},
+        {"type": "contains_any", "values": ["不包含", "非目标", "范围"]},
+        {"type": "max_chars", "value": 5000}
+      ]
+    }
+  ]
+}

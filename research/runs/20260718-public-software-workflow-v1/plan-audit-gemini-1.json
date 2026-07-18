@@ -1,0 +1,28 @@
+{
+  "schema": "smart_llm_router.public_plan_audit.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "reviewer": {
+    "provider": "gemini-free",
+    "model": "gemini-2.5-pro",
+    "ledger_id": "82fb08f0426008e7"
+  },
+  "decision": "fail",
+  "blocking_issues": [
+    "The six workflow success criteria are referenced but not expanded inside the plan artifact.",
+    "The stable role order and provider priority are not explicitly described as final tie-breakers.",
+    "The concrete module containing ROLE_QUALITY_BANDS is not named."
+  ],
+  "required_changes": [
+    "Expand the six contract criteria in the plan.",
+    "Clarify the complete lexicographic ordering and final tie-breakers.",
+    "Name smart_llm_router/router.py as the role-band source."
+  ],
+  "test_gaps": [
+    "No-qualified-route fail-closed behavior.",
+    "Stable role order and provider priority when every higher-priority key ties."
+  ],
+  "cost_risks": [
+    "Strict fail-closed behavior can reduce availability when every qualified route is cooled or unavailable.",
+    "A cost-first choice among quality-qualified routes may trade away latency or extra quality; this must remain an explicit policy decision."
+  ]
+}

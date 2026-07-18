@@ -1,0 +1,25 @@
+{
+  "schema": "hermes_router_hub.workflow_checkpoint.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "stage": "execute",
+  "objective_alignment": "aligned",
+  "evidence": [
+    "plan_audit_pass:cf62e3ad32304782",
+    "implementation_evidence:implementation-evidence.json",
+    "unit_tests:67_passed",
+    "compileall:passed",
+    "diff_check:no_whitespace_errors",
+    "scope:approved_files_only",
+    "execution:isolation_staging_copy"
+  ],
+  "scope_changes": [],
+  "criterion_status": {
+    "quality_floor": "pass",
+    "cost_order": "pass",
+    "surface_consistency": "pass",
+    "tests": "pass",
+    "budget": "pass",
+    "security": "pass"
+  },
+  "spent_usd": 0.045
+}

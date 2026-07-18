@@ -1,0 +1,43 @@
+{
+  "schema": "hermes_router_hub.workflow_contract.v1",
+  "workflow_id": "wf-smart-router-v1",
+  "objective": "完成一项可验收、可回退且不偏离主目标的智能路由升级",
+  "task_type": "execute",
+  "domain": "general",
+  "risk": "high",
+  "quality_target": "frontier",
+  "privacy": "external_allowed",
+  "paid_allowed": true,
+  "workflow_budget_usd": 0.05,
+  "max_stage_cost_usd": 0.02,
+  "max_conditional_checks": 1,
+  "automation_mode": "manual_controlled",
+  "hermes_security_approved": false,
+  "success_criteria": [
+    {
+      "id": "tests",
+      "text": "全部自动化测试和 dry-run 验收通过"
+    },
+    {
+      "id": "scope",
+      "text": "没有增加规划审查未批准的范围"
+    },
+    {
+      "id": "budget",
+      "text": "累计模型成本不超过工作流预算"
+    },
+    {
+      "id": "security",
+      "text": "没有绕过隐私门、人工控制和 Hermes 安全硬停止"
+    }
+  ],
+  "constraints": [
+    "规划审查通过前不得执行",
+    "范围变化必须先进入过程检查点",
+    "最终交付前必须从原始目标独立复验"
+  ],
+  "non_goals": [
+    "不自动开启 Hermes 无人值守调度",
+    "不在本阶段替换 Hermes 内部会话模型"
+  ]
+}

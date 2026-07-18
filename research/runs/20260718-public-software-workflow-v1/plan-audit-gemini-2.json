@@ -1,0 +1,24 @@
+{
+  "schema": "smart_llm_router.public_plan_audit.v1",
+  "workflow_id": "wf-quality-target-cost-floor-public-v1",
+  "reviewer": {
+    "provider": "gemini-free",
+    "model": "gemini-2.5-pro",
+    "ledger_id": "cc356c6914bbd6cf"
+  },
+  "decision": "fail",
+  "resolved_issues": [
+    "The four target floors are explicit.",
+    "The eight-level deterministic ordering is explicit.",
+    "No-qualified-route fail-closed behavior is explicit."
+  ],
+  "blocking_issues": [
+    "The second-round prompt did not repeat the exact first-round findings, so closure could not be proven from supplied context.",
+    "run_llm_task needs a dedicated direct-call integration test for selection consistency and no-qualified-route failure."
+  ],
+  "residual_risks": [
+    "Production route choices can change and require dry-run comparison.",
+    "Strict floors can temporarily leave no route.",
+    "Free-route availability still depends on current health and cooldown evidence."
+  ]
+}

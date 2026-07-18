@@ -1,0 +1,37 @@
+# Secrets and local state
+.env
+*.env
+!.env.example
+All_API*.txt
+credential-catalog*.txt
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+*.bak-*
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+runtime/
+data/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Router state
+.smart-llm-router/
+llm_router_state.json
+llm_pool_refresh_report.json
+llm_free_model_quick_benchmark.json
+llm_modality_refresh_report.json
+llm_pool_maintenance_report.json
+llm_response_cache.json
+llm_cost_ledger.jsonl

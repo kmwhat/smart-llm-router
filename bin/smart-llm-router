@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+STATE_HOME=${XDG_STATE_HOME:-"$HOME/.local/state"}
+PERSISTENT_RUNTIME="$STATE_HOME/smart-llm-router"
+if [ -z "${SMART_LLM_RUNTIME_DIR:-}" ]; then
+  if mkdir -p "$PERSISTENT_RUNTIME" 2>/dev/null && [ -w "$PERSISTENT_RUNTIME" ]; then
+    export SMART_LLM_RUNTIME_DIR="$PERSISTENT_RUNTIME"
+  else
+    export SMART_LLM_RUNTIME_DIR="${TMPDIR:-/tmp}/smart-llm-router-runtime"
+  fi
+fi
+
+PYTHON_BIN=${SMART_LLM_PYTHON:-"$PROJECT_ROOT/.venv/bin/python"}
+if [ ! -x "$PYTHON_BIN" ]; then
+  PYTHON_BIN=$(command -v python3)
+fi
+
+ENV_FILE=${SMART_LLM_ENV_FILE:-"$PROJECT_ROOT/.env"}
+export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$PYTHON_BIN" \
+  -m smart_llm_router.cli \
+  --env-file "$ENV_FILE" \
+  "$@"
