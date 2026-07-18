@@ -89,11 +89,10 @@ def _is_gemini_provider(provider: LLMProvider) -> bool:
 
 def _load_providers() -> tuple[LLMProvider, ...]:
     providers: list[LLMProvider] = []
-    for namespace in ("SMART_LLM", "FENGSHUI_LLM"):
-        for index in range(1, 25):
-            provider = _read_provider(f"{namespace}{index}_", index)
-            if provider:
-                providers.append(provider)
+    for index in range(1, 25):
+        provider = _read_provider(f"SMART_LLM{index}_", index)
+        if provider:
+            providers.append(provider)
     gemini_paid_enabled = _bool_env("SMART_LLM_GEMINI_PAID_ENABLED", False)
     if not gemini_paid_enabled:
         providers = [provider for provider in providers if not (_is_gemini_provider(provider) and not provider.free)]
@@ -203,10 +202,9 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
     data_dir = Path(
         os.getenv("SMART_LLM_RUNTIME_DIR")
         or os.getenv("SMART_LLM_DATA_DIR")
-        or os.getenv("FENGSHUI_DATA_DIR")
         or str(default_dir)
     ).expanduser()
-    timeout = float(os.getenv("SMART_LLM_TIMEOUT") or os.getenv("FENGSHUI_LLM_TIMEOUT") or "45")
+    timeout = float(os.getenv("SMART_LLM_TIMEOUT") or "45")
     refresh_timeout = float(os.getenv("SMART_LLM_EMPTY_POOL_REFRESH_TIMEOUT", "5") or "5")
     refresh_limit = int(os.getenv("SMART_LLM_EMPTY_POOL_REFRESH_LIMIT", "8") or "8")
     discovery_ttl_hours = float(os.getenv("SMART_LLM_DISCOVERY_TTL_HOURS", "6") or "6")

@@ -113,7 +113,7 @@ class WorkflowGovernanceTests(unittest.TestCase):
 
     def test_auto_privacy_fails_closed_when_objective_contains_sensitive_data(self) -> None:
         env = {"QWEN_KEY": "test", "GLM_KEY": "test", "GEMINI_KEY": "test", "DEEPSEEK_KEY": "test", "KIMI_KEY": "test"}
-        contract = self._contract(objective="整理微信聊天并输出客户摘要", privacy="auto")
+        contract = self._contract(objective="整理私人聊天记录并输出摘要", privacy="auto")
         with patch.dict(os.environ, env, clear=True):
             result = build_workflow_plan(self._settings(), contract)
         self.assertEqual(result["effective_privacy"], "local_only")

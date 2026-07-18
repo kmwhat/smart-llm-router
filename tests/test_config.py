@@ -96,6 +96,22 @@ class ConfigTests(unittest.TestCase):
         provider = next(item for item in settings.providers if item.name == "groq-free")
         self.assertEqual(provider.billing_class, "trial_quota")
 
+    def test_private_legacy_namespace_is_not_loaded_by_public_core(self) -> None:
+        legacy_prefix = "FENG" + "SHUI"
+        with patch.dict(
+            os.environ,
+            {
+                f"{legacy_prefix}_LLM1_NAME": "private-route",
+                f"{legacy_prefix}_LLM1_BASE_URL": "https://private.example/v1",
+                f"{legacy_prefix}_LLM1_API_KEY_ENV": "PRIVATE_KEY",
+                f"{legacy_prefix}_LLM1_MODELS": "private-model",
+                "PRIVATE_KEY": "test",
+            },
+            clear=True,
+        ):
+            settings = load_settings()
+        self.assertNotIn("private-route", {provider.name for provider in settings.providers})
+
 
 if __name__ == "__main__":
     unittest.main()

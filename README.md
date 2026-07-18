@@ -3,7 +3,7 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Version 0.5.0rc1 adds goal-locked workflow planning, quality-band free-first role routing,
+Version 0.5.0rc2 adds goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
 loading from an optional credential catalog selected with
 `SMART_LLM_CREDENTIAL_CATALOG`. Secret values remain local and in process
@@ -12,6 +12,12 @@ memory; provider/status output never prints them.
 The July 7 Hermes Router Hub skillpack is treated as a governance protocol, not
 as a replacement for this router's real provider adapters. Its dry-run server
 remains a compatibility test surface only.
+
+## 公共核心边界
+
+本仓库只提供通用路由、治理、模态适配和成本控制能力，不内置任何特定行业的
+术语表、纠错规则、用户资料或业务提示词。垂直领域集成应在私有调用层通过
+`--domain`、任务上下文或独立技能封装注入，并与公共发行包分开维护。
 
 ```bash
 smart-llm-router providers
@@ -36,10 +42,10 @@ $HOME/.local/state/smart-llm-router
 - 防返工工作流：`workflow-plan` 固化“规划 -> 规划审查 -> 执行 -> 过程检查 -> 最终偏离复验”，`workflow-check` 在本地判定继续、复验、停止或完成。
 - 旗舰质量链：规划、执行、跨厂商审计、独立复验、最终质量提升各自选择最合适模型；同模型换 Key 只算容灾，不算独立复验。
 - 四档质量：`draft`、`production`、`audit`、`frontier` 分别要求角色质量档至少为 2、3、4、4。达到下限后再按健康、预算资格、免费、重试后预计成本、P95 延迟和质量余量排序。
-- 隐私与预算门：敏感手相原图、微信聊天和身份信息默认 `local_only`；`--max-cost-usd` 下未知价格的付费模型失败关闭。
+- 隐私与预算门：私人图片、聊天记录、身份信息和原始音视频默认 `local_only`；`--max-cost-usd` 下未知价格的付费模型失败关闭。
 - 多模态路由预演：`route-plan` 会先输出任务描述器、本地步骤、免费池、低价付费和 Codex 审计路线，不调用模型。
 - Provider-family 能力注册表：`capabilities` 会区分“供应商 API key 已知可支持的模型态”和“当前已配置、已探活、可执行路由的具体模型”，覆盖文本、视觉/OCR、ASR、图像/视频生成、embedding、rerank、code 等。
-- 转写稿分块纠错：`transcript-correct` 会把课程 ASR 文本分块修正并落盘，避免 Codex 吞整节原始转写稿。
+- 转写稿分块纠错：`transcript-correct` 会把长篇 ASR 文本分块修正并落盘，避免编排层加载整份原始转写稿。
 - 免费池优先：优先尝试免费模型，失败自动换下一个。
 - 视觉模型路由：支持本地图片 `--image`，自动转换为 OpenAI-compatible 多模态消息。
 - 视觉图片压缩：发送前自动压缩为适合 API 的 JPEG，避免手机原图上传超时。
@@ -48,7 +54,7 @@ $HOME/.local/state/smart-llm-router
 - 角色路线同时考虑任务专长与成本：DeepSeek V4、Qwen 3.7、GLM-5.2、Kimi K3、Gemini Free Tier 和 Doubao Seed 2.1/2.0 分工协作。
 - 本地复杂度评分：先判断 `simple`、`medium`、`hard`，简单任务默认禁用付费兜底。
 - 成本/调用账本：记录每次模型调用、失败和缓存命中，便于后续调优。
-- 历史健康真值面：`route-stats` 按任务/provider/model 汇总成功率、失败类型、P95 延迟和观测成本；明确的本机 DNS/网络故障不计入模型失败率。
+- 历史健康真值面：`route-stats` 按任务/provider/model 汇总成功率、失败类型、P95 延迟和观测成本；明确的本地基础设施故障不计入模型失败率。
 - 模型晋级门：`golden-eval` 用任务黄金集对比候选与基线并生成盲审包；`promotion-check` 结合案例、成本、健康样本和独立第三家盲审，只输出可登记资格，不自动修改生产角色表。
 - 响应缓存：相同任务和上下文命中本地缓存，避免重复花 token。
 - 本地检索前置：可从本地 `txt/md` 资料目录检索相关片段，再注入模型上下文。
@@ -59,16 +65,16 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-从 GitHub Release 安装候选版：
+从当前 GitHub 预发布包安装：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install \
-  https://github.com/kmwhat/smart-llm-router/releases/download/v0.5.0rc1/smart_llm_router-0.5.0rc1-py3-none-any.whl
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.5.0rc2/smart_llm_router-0.5.0rc2-py3-none-any.whl"
+smart-llm-router --help
 ```
 
-从源码安装：
+从源码安装并参与开发：
 
 ```bash
 git clone https://github.com/kmwhat/smart-llm-router.git
@@ -89,16 +95,16 @@ cp .env.example .env
 smart-llm-router recommend "审计架构并设计多步骤优化方案" --task draft
 smart-llm-router route-plan "规划、执行并审计系统升级" --task plan --quality-target frontier --paid-allowed --max-cost-usd 0.05
 smart-llm-router discover-ark --limit 100
-smart-llm-router route-plan "修正奇门课程转写稿" --task transcript_correct --domain qimen --quality-target production --paid-allowed
-smart-llm-router transcript-correct /path/to/lesson.chunked.txt --domain qimen --paid-main --cross-check
+smart-llm-router route-plan "修正技术培训转写稿" --task transcript_correct --domain software --quality-target production --paid-allowed
+smart-llm-router transcript-correct /path/to/transcript.txt --domain software --paid-main --cross-check
 smart-llm-router capabilities --configured-only
 smart-llm-router maintain --limit 8
 smart-llm-router refresh-modalities --tasks qa,vision,ocr,transcript_correct,code --limit 2
 smart-llm-router refresh-modalities --tasks audit --families zhipu --include-paid --limit 1 --timeout 45
 smart-llm-router refresh-modalities --tasks embed,rerank --families zhipu --include-paid --limit 1 --timeout 20
-smart-llm-router embed "风水讲究形势与理气" --provider zhipu --model embedding-3 --dimensions 256
-smart-llm-router rerank --query "风水气口" "风水重视气口与来龙" "今天适合整理文件" --provider zhipu --model rerank
-smart-llm-router embed "风水讲究形势与理气" --provider qwen --model text-embedding-v4 --dimensions 256
+smart-llm-router embed "分布式系统需要处理故障恢复" --provider zhipu --model embedding-3 --dimensions 256
+smart-llm-router rerank --query "数据库索引优化" "复合索引应结合查询条件设计" "今天适合整理文件" --provider zhipu --model rerank
+smart-llm-router embed "分布式系统需要处理故障恢复" --provider qwen --model text-embedding-v4 --dimensions 256
 smart-llm-router asr-status
 smart-llm-router transcribe /path/to/video.mp4 --language zh
 smart-llm-router remote-transcribe /path/to/audio.wav --provider zhipu --allow-external
@@ -111,7 +117,7 @@ smart-llm-router refresh --timeout 6 --limit 8
 smart-llm-router refresh-modalities --timeout 6 --limit 2
 smart-llm-router status
 smart-llm-router clear
-smart-llm-router score "清洗 OCR：生命綫 深長" --task clean
+smart-llm-router score "清洗 OCR：服務狀態 正常" --task clean
 smart-llm-router ledger --limit 20
 smart-llm-router route-stats --task audit --limit 1000
 smart-llm-router golden-eval examples/golden-sets/audit-public-v1.json --provider groq-free --model qwen/qwen3.6-27b --baseline-provider deepseek-direct-paid --baseline-model deepseek-v4-pro --allow-paid
@@ -126,15 +132,15 @@ smart-llm-router promotion-check /path/to/report.json --review /path/to/blind-re
 
 ```bash
 smart-llm-router task "把这段 OCR 文本整理成要点" --task summarize --context "原文..."
-smart-llm-router task "判断资料属于手相、八字还是风水" --task classify --context "标题和目录..."
-smart-llm-router task "清洗 OCR：生命綫 深長，智惠线 分明" --task clean
-smart-llm-router task "只输出 JSON：判断图片是否包含手掌" --task vision --image /path/to/hand.png --free-only
+smart-llm-router task "判断资料属于产品需求、技术设计还是测试报告" --task classify --context "标题和目录..."
+smart-llm-router task "清洗 OCR：服務狀態 正常，緩存命中率 穩定" --task clean
+smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/document.png --free-only
 ```
 
 从本地资料目录先检索，再调用模型：
 
 ```bash
-smart-llm-router task "总结手相中生命线的判断要点" \
+smart-llm-router task "总结文档中的缓存失效策略" \
   --task summarize \
   --retrieve-dir /path/to/vault \
   --retrieve-limit 5 \
@@ -165,7 +171,7 @@ smart-llm-router task "制定可验收的升级方案" --task plan --quality-tar
 | 提质 | 保持事实边界的最终收束 | Kimi K3、Qwen 3.7 Max、GLM-5.2 |
 | 多模态支线 | 图片理解、OCR、图文联合推理 | Gemini 2.5 Pro Free Tier、Doubao Seed 2.0 Pro、Kimi K3 |
 
-选择顺序固定为：隐私与模态硬门槛 -> `quality_target` 最低角色档（`draft=2`、`production=3`、`audit=4`、`frontier=4`）-> 当前冷却/额度和历史路线健康 -> 预算资格 -> 免费优先 -> 按平滑成功率修正的预计总成本 -> 成功调用 P95 延迟 -> 更高质量余量 -> 角色预设顺序 -> Provider 优先级。至少 3 个非基础设施健康样本且成功率低于 50% 才标记为退化；明确的本机 DNS/网络故障单列，不污染模型成功率。只要达到任务要求的质量下限，健康免费模型可以压过更高但不必要的付费档；低于下限或未登记的模型不会进入角色路线。没有合格角色模型时明确失败关闭，不回退到通用池。每个阶段只执行一个主模型，失败才按候选顺序切换；规划审核和最终复验属于独立治理关卡，不算重复执行。
+选择顺序固定为：隐私与模态硬门槛 -> `quality_target` 最低角色档（`draft=2`、`production=3`、`audit=4`、`frontier=4`）-> 当前冷却/额度和历史路线健康 -> 预算资格 -> 免费优先 -> 按平滑成功率修正的预计总成本 -> 成功调用 P95 延迟 -> 更高质量余量 -> 角色预设顺序 -> Provider 优先级。至少 3 个非基础设施健康样本且成功率低于 50% 才标记为退化；明确的本地基础设施故障单列，不污染模型成功率。只要达到任务要求的质量下限，健康免费模型可以压过更高但不必要的付费档；低于下限或未登记的模型不会进入角色路线。没有合格角色模型时明确失败关闭，不回退到通用池。每个阶段只执行一个主模型，失败才按候选顺序切换；规划审核和最终复验属于独立治理关卡，不算重复执行。
 
 健康证据只说明 endpoint 最近是否可调用，不等于回答质量。动态发现的新模型仍须通过任务探针、黄金集与独立复核，才能登记进 `plan`、`execute`、`audit`、`verify` 或 `quality_enhance` 的角色质量档。
 
@@ -211,19 +217,19 @@ smart-llm-router workflow-check \
 
 `workflow-plan` 同时检查工作流总预算、单阶段预算、规划与规划审查是否使用独立模型家族、执行与最终复验是否独立，以及 Hermes 无人值守安全门。过程检查点出现范围变化、证据缺失、验收项失败或未知、目标对齐不确定时返回 `verify_required`；目标已偏离、预算超限或最终验收不完整时返回 `stop`。最终提质只在复验明确发现质量缺口时条件调用。真正模型执行继续复用现有 `task` 命令，每次只运行一个已批准阶段。
 
-豆包在线推理、Coding Plan 和自建 Endpoint 是三条独立计费路线，模型名不能混用。当前账号已实测通过 `doubao-seed-2-0-pro-260215` 的文本和图片理解；`doubao-seed-2-1-pro` 公开别名在当前在线推理接口返回 404，处于自动冷却，不进入可执行路线。Seedream、Seedance、语音和多模态 embedding 暂先进入能力注册表，等待专用 adapter 和独立探针。
+豆包在线推理、Coding Plan 和自建 Endpoint 是三条独立计费路线，模型名不能混用。只有具体 endpoint/model 通过任务探针后才进入可执行路线；返回 403/404、超时或空结果的候选会自动冷却。Seedream、Seedance、语音和多模态 embedding 只有在专用 adapter 和独立探针通过后才能执行。
 
-课程转写稿纠错，建议先规划再执行：
+培训、访谈或讲座转写稿纠错，建议先规划再执行：
 
 ```bash
-smart-llm-router route-plan "修正课程转写稿并保留老师判断链" \
+smart-llm-router route-plan "修正技术培训转写稿并保留讲解顺序和论证链" \
   --task transcript_correct \
-  --domain qimen \
+  --domain software \
   --quality-target production \
   --paid-allowed
 
-smart-llm-router transcript-correct /path/to/lesson.chunked.txt \
-  --domain qimen \
+smart-llm-router transcript-correct /path/to/transcript.txt \
+  --domain software \
   --paid-main \
   --cross-check
 ```
@@ -243,7 +249,7 @@ smart-llm-router transcript-correct /path/to/lesson.chunked.txt \
 视觉模型快速实测：
 
 ```bash
-smart-llm-router benchmark-vision /path/to/hand.png --timeout 12 --limit 8
+smart-llm-router benchmark-vision /path/to/document.png --timeout 12 --limit 8
 ```
 
 `vision` 任务同样有动态换模型能力：会按 `SMART_LLM_TASK_ORDER_VISION` 或默认顺序先试免费视觉模型；某个模型 429、超时、403/404、不支持图片或空返回，会写入冷却状态并立即尝试下一个模型。免费视觉池全部失败后，才按成本策略进入付费兜底。
@@ -285,18 +291,18 @@ macOS/Linux cron 示例，每 6 小时探活一次：
 ## 成本控制策略
 
 - `score` 命令完全本地运行，不调用模型。
-- `route-stats` 完全本地读取账本，不调用模型、不读取或输出 API key；可用它判断某个任务路线是配额退化、端点失效还是仅遇到本机网络故障。
+- `route-stats` 完全本地读取账本，不调用模型、不读取或输出 API key；可用它判断某个任务路线是配额退化、端点失效还是仅遇到本地基础设施故障。
 - `promotion-check` 完全本地运行；黄金集文件禁止携带 API key、令牌、密码或私钥字段，公开套件和私有套件必须按隐私边界分开保存。
 - `simple` 任务在默认模式下只走免费池；免费池不可用时会报错，不直接烧付费模型。
 - `medium` 和 `hard` 任务仍免费优先，免费池失败后才按低价付费兜底。
-- 课程转写稿、知识抽取、生产级笔记这类大吞吐任务，优先用本地工具和低价模型处理，Codex 只做总控、抽检、结构审计和最终收束。
+- 长篇转写稿、知识抽取、生产级笔记这类大吞吐任务，优先用本地工具和低价模型处理，编排层只做总控、抽检、结构审计和最终收束。
 - 一个 provider key 可能覆盖多个模型态；配置应按 provider family + endpoint/model mode 登记。智谱、千问、豆包这类供应商要把文本、视觉/OCR、音频/ASR/TTS、图像/视频生成、embedding、rerank、code 分开登记、分开健康检查。`embed` 和 `rerank` 已有专用 adapter；未实现专用 adapter 的图像/视频/语音生成接口只进入 `capabilities`/`route-plan`，不进入真实 `task` 调用。
 - DeepSeek 官方直连目前只登记文本/推理模型，不把同一个 Key 虚构成视觉、ASR、TTS、图像或视频权限。
-- `remote-transcribe` 是隐私敏感的显式命令：没有 `--allow-external` 必须失败。课程和用户原始音频默认仍使用本地 Whisper。
+- `remote-transcribe` 是隐私敏感的显式命令：没有 `--allow-external` 必须失败。私有原始音频默认仍使用本地 Whisper。
 - `image-generate` 会产生费用：没有 `--allow-paid` 必须失败。视频生成和 TTS 在异步/WebSocket 专用适配器通过前只保留为候选能力。
 - 豆包/火山方舟除 API Key 外还可能需要具体 endpoint/resource id；占位 id 不能进入生产路由。
 - `rerank` 分数是 provider-specific 的相对排序信号，不要把原始分数当成跨供应商通用的绝对相关阈值；生产检索要结合 top-k、来源类型、术语命中和二次证据过滤。
-- 当前生产热路径：`embed` 默认优先千问 `text-embedding-v4`，再智谱 `embedding-3`；`rerank` 默认智谱 `rerank`。千问 `gte-rerank` adapter 已预留 DashScope 专用路径，但当前账号/服务探活返回 `AccessDenied`，保持软禁用直到权限开通并探活通过。
+- 默认检索路线：`embed` 优先千问 `text-embedding-v4`，再智谱 `embedding-3`；`rerank` 默认智谱 `rerank`。千问 `gte-rerank` adapter 使用 DashScope 专用路径，只有在权限配置和健康检查都通过后才进入执行池。
 
 查看当前能力覆盖：
 
@@ -320,7 +326,7 @@ SMART_LLM_PRICE_OPENROUTER_DEEPSEEK_FALLBACK_OUTPUT=0.28
 
 ## 迁移到其他电脑
 
-1. 复制 `tools/smart-llm-router` 目录。
+1. 复制整个 `smart-llm-router` 项目目录。
 2. 在新电脑创建虚拟环境并 `pip install -e .`。
 3. 复制 `.env.example` 为 `.env`，填入新电脑可用的 key。
 4. 运行 `smart-llm-router refresh --timeout 6 --limit 8`。

@@ -217,7 +217,7 @@ class RoleRoutingTests(unittest.TestCase):
                     run_llm_task(
                         self._settings((provider,)),
                         task="vision",
-                        prompt="分析这张手掌照片",
+                        prompt="分析这张私人照片",
                         prefer_free=False,
                     )
         call.assert_not_called()

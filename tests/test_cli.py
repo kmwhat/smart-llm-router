@@ -37,6 +37,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.task, "audit")
         self.assertEqual(args.limit, 250)
 
+    def test_transcript_correction_defaults_to_general_domain(self) -> None:
+        args = build_parser().parse_args(["transcript-correct", "transcript.txt"])
+        self.assertEqual(args.domain, "general")
+
     def test_golden_eval_and_promotion_commands_parse(self) -> None:
         golden = build_parser().parse_args([
             "golden-eval",

@@ -5,7 +5,7 @@
 1. Every executable model mode has an endpoint adapter, entitlement probe, price unit, health state, and task-level quality record.
 2. The router can explain why a model was selected and report actual provider/model, privacy decision, cache state, cost, and verification result.
 3. A reboot does not erase the cost ledger, cooldowns, cache metadata, or modality health reports.
-4. A private palm-photo or consultation task is blocked from external routing by default.
+4. A task containing private user images or chat records is blocked from external routing by default.
 5. A trial quota cannot be reported as permanently free.
 6. A paid call is rejected when its estimated upper bound exceeds the task budget.
 7. Planning is independently audited before execution, and planning/audit model families differ.
@@ -19,7 +19,7 @@
 ## Minimal Test Matrix
 
 - Text: classify, summarize, long-context synthesis, code review, structured JSON.
-- Vision: OCR screenshot, document page, palm feature extraction with synthetic/non-private fixtures.
+- Vision: OCR screenshot, document page, and structured feature extraction with synthetic/non-private fixtures.
 - Audio: local ASR, low-confidence segment retry, remote permission gate.
 - Retrieval: embedding recall, rerank top-k relevance, source coverage.
 - Generation: image adapter cost gate and artifact persistence.

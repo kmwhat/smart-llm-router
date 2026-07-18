@@ -57,6 +57,6 @@ The public template keeps Gemini in free-tier mode. Never route it as paid unles
 
 OpenRouter and Groq free candidates are discovered dynamically. The runtime refreshes a stale discovery snapshot on demand (default six hours), keeps the last provider snapshot when discovery temporarily fails, and cools a model after 429, timeout, or endpoint failure. Groq availability is quota-backed trial capacity, not guaranteed permanent free capacity. Newly discovered models may serve low-risk general work, but they must pass task probes and receive an explicit role quality band before planning, execution, audit, or final verification. The current exception is the evidence-backed GPT-OSS 120B verification band above; it is registered, not merely discovered.
 
-For audio/video transcription, use local `asr-status` and `transcribe` first. Private palm images, WeChat data, identity data, and raw course media stay local unless external upload is explicitly authorized.
+For audio/video transcription, use local `asr-status` and `transcribe` first. Private images, chat records, identity data, and raw private media stay local unless external upload is explicitly authorized.
 
 This command bridge does not replace Hermes' conversation model. It routes auxiliary and delegated model work while Hermes remains the controller.

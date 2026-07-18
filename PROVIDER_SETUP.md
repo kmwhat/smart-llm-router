@@ -54,7 +54,7 @@ smart-llm-router providers
 smart-llm-router refresh --timeout 6 --limit 8
 smart-llm-router task "只输出 OK" --task qa --free-only
 smart-llm-router discover-vision --limit 20
-smart-llm-router task "只输出 JSON：判断图片是否包含手掌" --task vision --image /path/to/image.png --free-only
+smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/image.png --free-only
 ```
 
 `providers` 只显示 `has_key: true/false`，不会输出 key。
@@ -64,6 +64,6 @@ smart-llm-router task "只输出 JSON：判断图片是否包含手掌" --task v
 视觉能力优先使用免费池：
 
 - OpenRouter `:free` 且支持 image/text 的候选模型。
-- NVIDIA NIM 当前账号可见的 vision/VL/multimodal 模型。
+- NVIDIA NIM 当前配置凭据可见的 vision/VL/multimodal 模型。
 
 如果某个免费视觉模型失败，路由器会自动冷却并换下一个；只有免费池全部不可用，且调用时未设置 `--free-only`，才会进入付费兜底。
