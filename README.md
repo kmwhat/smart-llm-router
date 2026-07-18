@@ -59,11 +59,23 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
+从 GitHub Release 安装候选版：
+
 ```bash
-cd tools/smart-llm-router
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install \
+  https://github.com/kmwhat/smart-llm-router/releases/download/v0.5.0rc1/smart_llm_router-0.5.0rc1-py3-none-any.whl
+```
+
+从源码安装：
+
+```bash
+git clone https://github.com/kmwhat/smart-llm-router.git
+cd smart-llm-router
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 cp .env.example .env
 ```
 
