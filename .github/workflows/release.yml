@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip build
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Verify tag matches package version
+        run: python -c 'import os; from smart_llm_router import __version__; assert os.environ["GITHUB_REF_NAME"] == f"v{__version__}"'
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile package
+        run: python -m compileall -q smart_llm_router
+      - name: Build distributions
+        run: python -m build
+      - name: Smoke-test built wheel
+        run: |
+          python -m venv /tmp/router-release-smoke
+          /tmp/router-release-smoke/bin/python -m pip install dist/*.whl
+          /tmp/router-release-smoke/bin/smart-llm-router --help
+          /tmp/router-release-smoke/bin/smart-llm-router score "audit release packaging" --task audit
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum *.whl *.tar.gz > SHA256SUMS
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            exit 0
+          fi
+
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *rc* || "$GITHUB_REF_NAME" == *alpha* || "$GITHUB_REF_NAME" == *beta* ]]; then
+            prerelease=(--prerelease)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --verify-tag \
+            --title "Smart LLM Router ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            "${prerelease[@]}"
