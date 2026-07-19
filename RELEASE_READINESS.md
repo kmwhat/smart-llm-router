@@ -27,10 +27,16 @@ Prepared: 2026-07-18
 - Public-package boundary tests confirm that shipped files contain no private domain defaults.
 - GitHub Actions now installs and exercises the built wheel in a clean environment.
 - Main branch protection requires Python 3.10-3.14 tests and the `package-smoke` job.
+- Tag-triggered release automation rebuilds, tests, smoke-installs, checksums, attests, and publishes distribution artifacts.
 
-## Required Before Publication
+## Publication Result
 
-- Verify the `0.5.0rc2` pull-request CI matrix and clean package-install job.
-- Generate and verify SHA-256 checksums for the `0.5.0rc2` distribution files.
+- The domain-neutral public-core change passed all six required CI jobs and was merged through pull request #7.
+- The reproducible release workflow passed all six required CI jobs and was merged through pull request #8.
+- `v0.5.0rc2` was published as a prerelease from the protected `main` branch.
+- Release workflow run #1 rebuilt the package, reran 71 tests, smoke-installed the wheel, generated checksums, and published three artifacts.
+- Downloaded wheel and source-distribution assets passed `SHA256SUMS` verification and a second private-domain boundary scan.
+- GitHub artifact attestation #35972124 records SLSA provenance for all three release artifacts.
+- The `v0.5.0rc1` release now points new installations to `v0.5.0rc2`.
 
-Publication remains blocked until the `0.5.0rc2` pull request and release artifacts pass these final gates.
+All publication gates for `v0.5.0rc2` are complete.
