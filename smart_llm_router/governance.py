@@ -12,11 +12,32 @@ from .router import TASK_TYPES, route_plan
 
 
 SENSITIVITY_CLASSES = ("public", "external_cacheable", "internal_summary", "internal_raw", "secret")
+TASK_FAMILIES = tuple(sorted(set(TASK_TYPES) | {"text_light", "text_deep", "tool_only"}))
 WORKFLOW_STAGES = ("plan_design", "plan_audit", "execute", "process_checkpoint", "final_verify", "quality_enhance")
 QUALITY_TARGETS = ("production", "audit", "frontier")
 PRIVACY_MODES = ("auto", "local_only", "external_allowed")
 AUTOMATION_MODES = ("manual_controlled", "unattended")
 RISK_LEVELS = ("low", "medium", "high")
+
+
+def _materialization_gate(payload: dict[str, Any]) -> dict[str, Any]:
+    raw = payload.get("materialization_gate") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("materialization_gate must be an object")
+    required_fields = raw.get("required_fields") or []
+    if not isinstance(required_fields, list) or any(not str(field).strip() for field in required_fields):
+        raise ValueError("materialization_gate.required_fields must be a list of non-empty field names")
+    return {
+        "required": bool(raw.get("required", False)),
+        "parse_json": bool(raw.get("parse_json", False)),
+        "non_empty": bool(raw.get("non_empty", True)),
+        "required_fields": [str(field).strip() for field in required_fields],
+    }
+
+
+def _contract_fingerprint(contract: dict[str, Any]) -> str:
+    canonical = json.dumps(contract, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def validate_task_contract(payload: dict[str, Any]) -> dict[str, Any]:
@@ -25,24 +46,67 @@ def validate_task_contract(payload: dict[str, Any]) -> dict[str, Any]:
     sensitivity = str(payload.get("sensitivity") or "public")
     if sensitivity not in SENSITIVITY_CLASSES:
         raise ValueError(f"unsupported sensitivity: {sensitivity}")
+    task_family = str(payload.get("task_family") or "text_light")
+    if task_family not in TASK_FAMILIES:
+        raise ValueError(f"unsupported task_family: {task_family}")
     free_only = bool(payload.get("free_only", True))
     paid_allowed = bool(payload.get("paid_fallback_allowed", False))
     cloud_raw = bool(payload.get("internal_raw_cloud_allowed", False))
+    sanitized_for_external = bool(payload.get("sanitized_for_external", False))
+    external_processing_approved = bool(payload.get("external_processing_approved", False))
     if free_only and paid_allowed:
         raise ValueError("free_only and paid_fallback_allowed cannot both be true")
     if sensitivity == "secret":
         raise ValueError("secret material must not be routed to a model")
     if sensitivity == "internal_raw" and cloud_raw:
         raise ValueError("internal_raw cloud routing requires a separate explicit execution approval")
-    return {
+    allow_cloud = sensitivity in {"public", "external_cacheable"} or (
+        sensitivity == "internal_summary" and sanitized_for_external and external_processing_approved
+    )
+    contract = {
+        "schema": "hermes_router_hub.task_contract.v1",
         "task_id": str(payload.get("task_id") or "task-unknown"),
         "agent": str(payload.get("agent") or "codex"),
-        "task_family": str(payload.get("task_family") or "text_light"),
+        "task_family": task_family,
         "sensitivity": sensitivity,
         "free_only": free_only,
         "paid_fallback_allowed": paid_allowed,
-        "allow_cloud": sensitivity in {"public", "external_cacheable", "internal_summary"},
+        "sanitized_for_external": sanitized_for_external,
+        "external_processing_approved": external_processing_approved,
+        "allow_cloud": allow_cloud,
         "route_receipt_required": bool(payload.get("route_receipt_required", True)),
+        "materialization_gate": _materialization_gate(payload),
+    }
+    contract["contract_fingerprint"] = _contract_fingerprint(contract)
+    return contract
+
+
+def validate_materialized_output(path: str | Path, gate: dict[str, Any]) -> dict[str, Any]:
+    target = Path(path).expanduser().resolve()
+    if not target.is_file():
+        raise ValueError(f"materialized output is not a file: {target}")
+    content = target.read_bytes()
+    if gate.get("non_empty", True) and not content:
+        raise ValueError("materialized output is empty")
+    parsed: Any = None
+    if gate.get("parse_json") or gate.get("required_fields"):
+        try:
+            parsed = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("materialized output is not valid UTF-8 JSON") from exc
+    required_fields = gate.get("required_fields") or []
+    if required_fields:
+        if not isinstance(parsed, dict):
+            raise ValueError("materialized output must be a JSON object when required_fields are configured")
+        missing = [field for field in required_fields if field not in parsed]
+        if missing:
+            raise ValueError(f"materialized output missing required fields: {', '.join(missing)}")
+    return {
+        "materialized": True,
+        "path": str(target),
+        "size_bytes": len(content),
+        "sha256": sha256(content).hexdigest(),
+        "validated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -55,8 +119,17 @@ def make_route_receipt(
     cost_class: str,
     paid_fallback_used: bool,
     decision_reasons: list[str],
+    route_alias: str | None = None,
+    fallback_chain: list[dict[str, Any] | str] | None = None,
+    ledger_id: str | None = None,
     output_path: str | None = None,
+    production_changed: bool = False,
 ) -> dict[str, Any]:
+    output = {"materialized": False, "path": None, "size_bytes": None, "sha256": None, "validated_at": None}
+    if output_path:
+        output = validate_materialized_output(output_path, contract.get("materialization_gate") or {})
+    elif (contract.get("materialization_gate") or {}).get("required") and mode == "execute":
+        raise ValueError("materialization gate requires an output_path for execute mode")
     return {
         "schema": "hermes_router_hub.route_receipt.v1",
         "receipt_id": "rr_" + uuid.uuid4().hex,
@@ -64,17 +137,20 @@ def make_route_receipt(
         "mode": mode,
         "agent": contract["agent"],
         "task_id": contract["task_id"],
+        "contract_fingerprint": contract["contract_fingerprint"],
         "task_family": contract["task_family"],
         "sensitivity": contract["sensitivity"],
+        "route_alias": route_alias,
         "selected_provider": selected_provider,
         "selected_model": selected_model,
         "cost_class": cost_class,
         "allow_cloud": contract["allow_cloud"],
         "paid_fallback_used": paid_fallback_used,
-        "fallback_chain": [],
+        "fallback_chain": list(fallback_chain or []),
+        "ledger_id": ledger_id,
         "decision_reasons": decision_reasons,
-        "output": {"materialized": bool(output_path), "path": output_path},
-        "production_changed": mode == "execute",
+        "output": output,
+        "production_changed": bool(production_changed),
     }
 
 

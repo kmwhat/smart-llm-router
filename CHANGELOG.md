@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+Target candidate: `0.6.0rc1`.
+
+### Changed
+
+- Hardened task contracts with a strict task-family allowlist and explicit sanitization plus approval gates before `internal_summary` may use cloud routes.
+- Linked route receipts to stable contract fingerprints, route aliases, fallback chains, ledger ids, and validated output hashes.
+- Added a fail-closed materialization gate for required, non-empty JSON artifacts and required fields.
+- Stopped inferring `production_changed` from execution mode; callers must provide evidence-backed state explicitly.
+- Added a six-state adapter lifecycle with fail-closed promotion gates, evidence fingerprints, and non-mutating transition receipts.
+- Required canary and health evidence for candidate entry, passed golden-set promotion evidence for qualification, and owner/smoke/rollback evidence for production.
+- Kept downgrade and retirement transitions available without upward-promotion evidence so incident rollback cannot be blocked by governance checks.
+- Added optional private lifecycle-state persistence with atomic writes, restrictive permissions, immutable receipts, and PASS-only adapter state updates.
+- Added a deterministic public QA golden suite for screening general low-cost QA candidates without weakening production-role review gates.
+- Tightened the general QA golden gate to require all deterministic cases after a candidate missed the rule-based next-action case.
+- Enforced private lifecycle declarations during route selection: declared adapters must be qualified or production, while undeclared legacy routes remain compatible.
+- Made persisted PASS receipts report `state_change_persisted` and include their runtime paths in the stored receipt, removing the stale owner-action message after state application.
+- Included public contracts, golden suites, skills, setup documentation, and CI metadata in source distributions, with CI/release assertions for required examples.
+
 ## 0.5.0rc2 - 2026-07-18
 
 ### Changed

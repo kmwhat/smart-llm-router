@@ -60,6 +60,24 @@ class CliTests(unittest.TestCase):
         self.assertTrue(golden.allow_paid)
         self.assertEqual(promotion.command, "promotion-check")
 
+    def test_adapter_lifecycle_command_parses_evidence_files(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "adapter-lifecycle",
+                "adapter.json",
+                "transition.json",
+                "--promotion-decision",
+                "promotion.json",
+                "--output",
+                "receipt.json",
+                "--state-dir",
+                "runtime/adapters",
+            ]
+        )
+        self.assertEqual(args.command, "adapter-lifecycle")
+        self.assertEqual(args.promotion_decision, "promotion.json")
+        self.assertEqual(args.state_dir, "runtime/adapters")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,71 @@
+{
+  "schema": "smart_llm_router.golden_suite.v1",
+  "suite_id": "qa-public-v1",
+  "description": "Public deterministic QA cases for screening low-cost general question-answering candidates.",
+  "task": "qa",
+  "proposed_role": "qa",
+  "proposed_quality_band": 2,
+  "quality_target": "draft",
+  "privacy": "external_allowed",
+  "thresholds": {
+    "min_cases": 5,
+    "min_case_pass_rate": 1.0,
+    "max_baseline_case_regression": 0.0,
+    "max_candidate_cost_usd": 0.000001,
+    "max_call_cost_usd": 0.02,
+    "min_health_samples": 3,
+    "baseline_required": false,
+    "independent_review_required": false,
+    "min_candidate_review_pass_rate": 0.8,
+    "min_candidate_win_or_tie_rate": 0.8,
+    "max_candidate_losses": 1
+  },
+  "rubric": [],
+  "cases": [
+    {
+      "id": "arithmetic-with-units",
+      "prompt": "根据上下文回答，只输出答案和单位。",
+      "context": "一个任务处理 12 个文件，每个文件 3 秒，总耗时是多少？",
+      "assertions": [
+        {"type": "contains_all", "values": ["36", "秒"]},
+        {"type": "max_chars", "value": 80}
+      ]
+    },
+    {
+      "id": "extract-version",
+      "prompt": "从上下文提取当前版本，只输出版本号。",
+      "context": "旧版本为 1.7.4；迁移完成后，当前发布版本为 2.3.1。",
+      "assertions": [
+        {"type": "contains_all", "values": ["2.3.1"]},
+        {"type": "not_contains_any", "values": ["1.7.4"]},
+        {"type": "max_chars", "value": 80}
+      ]
+    },
+    {
+      "id": "fail-closed-decision",
+      "prompt": "判断是否达到目标，只输出 pass 或 fail。",
+      "context": "目标是 10 项测试全部通过；证据显示 9 项通过、1 项失败。",
+      "assertions": [
+        {"type": "regex", "pattern": "(?i)^\\s*fail\\s*$"}
+      ]
+    },
+    {
+      "id": "select-private-route",
+      "prompt": "根据规则选择 local_only 或 external_allowed，只输出选项。",
+      "context": "规则：包含真实用户聊天原文时必须本地处理。任务输入包含真实用户聊天原文。",
+      "assertions": [
+        {"type": "regex", "pattern": "(?i)^\\s*local_only\\s*$"}
+      ]
+    },
+    {
+      "id": "identify-next-action",
+      "prompt": "根据上下文，只输出最小下一步。",
+      "context": "候选模型已通过健康探针，但尚未运行任务黄金集；规则要求黄金集通过后才能晋级。",
+      "assertions": [
+        {"type": "contains_all", "values": ["黄金集"]},
+        {"type": "contains_any", "values": ["运行", "执行", "通过"]},
+        {"type": "max_chars", "value": 120}
+      ]
+    }
+  ]
+}

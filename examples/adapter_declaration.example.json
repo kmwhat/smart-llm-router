@@ -1,0 +1,11 @@
+{
+  "schema": "smart_llm_router.adapter_declaration.v1",
+  "adapter_id": "public-text-adapter-example",
+  "provider": "example-free-provider",
+  "model": "example-text-model",
+  "modalities": [
+    "text"
+  ],
+  "current_state": "shadow",
+  "billing_class": "trial_quota"
+}

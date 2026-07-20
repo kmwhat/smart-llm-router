@@ -37,6 +37,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip build
       - run: python -m build
+      - run: python -c "import glob, tarfile; p=glob.glob('dist/*.tar.gz')[0]; n=set(tarfile.open(p).getnames()); assert any(x.endswith('/examples/golden-sets/qa-public-v1.json') for x in n); assert any(x.endswith('/examples/task_contract.example.json') for x in n)"
       - run: python -m venv /tmp/router-smoke
       - run: /tmp/router-smoke/bin/python -m pip install dist/*.whl
       - run: /tmp/router-smoke/bin/smart-llm-router --help

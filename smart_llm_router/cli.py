@@ -15,6 +15,7 @@ from .governance import (
     write_route_receipt,
     write_workflow_artifact,
 )
+from .lifecycle import evaluate_adapter_transition, persist_adapter_transition, write_adapter_transition_receipt
 from .router import (
     TASK_TYPES,
     capability_registry,
@@ -85,6 +86,13 @@ def build_parser() -> argparse.ArgumentParser:
     promotion.add_argument("report_file")
     promotion.add_argument("--review", help="独立盲审结果 JSON")
     promotion.add_argument("--output", help="晋级判定落盘路径；默认写到 report 同目录的 promotion-decision.json")
+
+    lifecycle = sub.add_parser("adapter-lifecycle", help="本地评估适配器状态迁移并生成回执；不自动修改注册表")
+    lifecycle.add_argument("adapter_file", help="适配器声明 JSON")
+    lifecycle.add_argument("transition_file", help="状态迁移请求 JSON")
+    lifecycle.add_argument("--promotion-decision", help="qualified/production 必需的 promotion decision JSON")
+    lifecycle.add_argument("--output", help="迁移回执落盘路径；省略时仅输出 stdout")
+    lifecycle.add_argument("--state-dir", help="显式指定私有运行态目录；PASS 时更新声明并保存回执")
 
     contract = sub.add_parser("contract-plan", help="验证 Hermes Router Hub 任务契约并生成 dry-run 路由回执")
     contract.add_argument("contract_file")
@@ -296,6 +304,20 @@ def main() -> None:
         output_path = args.output or str(Path(args.report_file).expanduser().resolve().parent / "promotion-decision.json")
         decision["artifact_path"] = str(write_promotion_decision(decision, output_path))
         print(json.dumps(decision, ensure_ascii=False, indent=2))
+    elif args.command == "adapter-lifecycle":
+        adapter = json.loads(Path(args.adapter_file).read_text(encoding="utf-8"))
+        transition = json.loads(Path(args.transition_file).read_text(encoding="utf-8"))
+        promotion_decision = (
+            json.loads(Path(args.promotion_decision).read_text(encoding="utf-8"))
+            if args.promotion_decision
+            else None
+        )
+        receipt = evaluate_adapter_transition(adapter, transition, promotion_decision=promotion_decision)
+        if args.state_dir:
+            receipt["runtime_state"] = persist_adapter_transition(adapter, receipt, args.state_dir)
+        if args.output:
+            receipt["artifact_path"] = str(write_adapter_transition_receipt(receipt, args.output))
+        print(json.dumps(receipt, ensure_ascii=False, indent=2))
     elif args.command == "contract-plan":
         payload = json.loads(Path(args.contract_file).read_text(encoding="utf-8"))
         validated = validate_task_contract(payload)

@@ -1,0 +1,21 @@
+{
+  "schema": "hermes_router_hub.task_contract.v1",
+  "task_id": "public-example-001",
+  "agent": "codex",
+  "task_family": "summarize",
+  "sensitivity": "public",
+  "free_only": true,
+  "paid_fallback_allowed": false,
+  "sanitized_for_external": false,
+  "external_processing_approved": false,
+  "route_receipt_required": true,
+  "materialization_gate": {
+    "required": true,
+    "parse_json": true,
+    "non_empty": true,
+    "required_fields": [
+      "schema",
+      "result"
+    ]
+  }
+}
