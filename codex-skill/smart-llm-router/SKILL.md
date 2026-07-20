@@ -28,20 +28,13 @@ the project `.env` by default or `SMART_LLM_ENV_FILE` when set, and never prints
 ```bash
 smart-llm-router providers
 smart-llm-router capabilities --configured-only
-smart-llm-router refresh-modalities --tasks qa,vision,ocr,transcript_correct,code --limit 2
-smart-llm-router refresh-modalities --tasks audit --families zhipu --include-paid --limit 1 --timeout 45
-smart-llm-router refresh-modalities --tasks embed,rerank --families zhipu --include-paid --limit 1 --timeout 20
+smart-llm-router refresh --timeout 6 --limit 5
 ```
 
 2. Discover current candidate models:
 
 ```bash
 smart-llm-router discover --limit 20
-smart-llm-router discover-openrouter --limit 20
-smart-llm-router discover-nvidia --limit 50
-smart-llm-router discover-groq --limit 50
-smart-llm-router discover-ark --limit 100
-smart-llm-router discover-vision --limit 20
 ```
 
 The global runtime automatically refreshes the discovery snapshot when it is older than
@@ -66,28 +59,17 @@ smart-llm-router clear
 5. Estimate complexity locally before spending tokens:
 
 ```bash
-smart-llm-router score "清洗 OCR：服務狀態 正常" --task clean
-smart-llm-router score "审计架构并设计多步骤优化方案" --task draft
-smart-llm-router route-plan "修正技术培训转写稿" --task transcript_correct --domain software --quality-target production --paid-allowed
-smart-llm-router route-plan "规划、执行并审计系统升级" --task plan --quality-target frontier --paid-allowed --max-cost-usd 0.05
+smart-llm-router score "Return OK" --task qa
+smart-llm-router recommend "Return OK" --task qa --free-only
+smart-llm-router route-plan "Return OK" --task qa --quality-target production
 smart-llm-router workflow-plan /path/to/workflow-contract.json --output-dir ./runtime/workflows
 smart-llm-router workflow-check /path/to/workflow-contract.json /path/to/checkpoint.json --output-dir ./runtime/workflows
-smart-llm-router transcript-correct /path/to/transcript.txt --domain software --paid-main --cross-check
 ```
 
 6. Run tasks:
 
 ```bash
-smart-llm-router task "任务提示" --task summarize --context "参考材料"
-smart-llm-router task "任务提示" --task classify --free-only
-smart-llm-router task "任务提示" --task draft --paid
-smart-llm-router task "制定可验收方案" --task plan --quality-target frontier --paid --max-cost-usd 0.05
-smart-llm-router task "修正转写稿" --task transcript_correct --context "原始转写..." --paid
-smart-llm-router task "总结文档中的缓存失效策略" --task summarize --retrieve-dir /path/to/vault --max-context-chars 6000
-smart-llm-router embed "分布式系统需要处理故障恢复" --provider zhipu --model embedding-3 --dimensions 256
-smart-llm-router rerank --query "数据库索引优化" "复合索引应结合查询条件设计" "今天适合整理文件" --provider zhipu --model rerank
-smart-llm-router embed "分布式系统需要处理故障恢复" --provider qwen --model text-embedding-v4 --dimensions 256
-smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/document.png --free-only
+smart-llm-router task "Return OK" --task qa --free-only
 ```
 
 7. Review the cost ledger and task-specific route health:
@@ -196,7 +178,6 @@ After changes, run:
 python -m compileall smart_llm_router
 smart-llm-router refresh --timeout 6 --limit 5
 smart-llm-router task "只输出 OK" --task qa --free-only
-smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/document.png --free-only
 ```
 
 Do not run large benchmark sweeps unless the user explicitly asks; free providers can rate-limit.

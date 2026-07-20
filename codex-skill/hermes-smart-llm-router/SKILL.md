@@ -22,14 +22,9 @@ smart-llm-router providers
 smart-llm-router capabilities --configured-only
 smart-llm-router maintain --limit 8
 smart-llm-router route-stats --limit 1000
-smart-llm-router golden-eval \
-  /path/to/smart-llm-router/examples/golden-sets/audit-public-v1.json \
-  --provider groq-free --model qwen/qwen3.6-27b \
-  --baseline-provider deepseek-direct-paid --baseline-model deepseek-v4-pro \
-  --allow-paid
-smart-llm-router discover-ark --limit 100
+smart-llm-router recommend "Return OK" --task qa --free-only
 smart-llm-router route-plan \
-  "任务描述" --task plan --quality-target frontier --paid-allowed --max-cost-usd 0.05
+  "Return OK" --task qa --quality-target production
 smart-llm-router workflow-plan \
   /path/to/workflow-contract.json --output-dir /path/to/workflow-runtime
 smart-llm-router workflow-check \

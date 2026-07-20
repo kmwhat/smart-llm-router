@@ -5,6 +5,47 @@ from smart_llm_router.router import _clean_transcript_locally
 
 
 class PublicPackageBoundaryTests(unittest.TestCase):
+    def test_shipped_docs_keep_quickstart_router_core_only(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        docs = [
+            root / "README.md",
+            root / "PROVIDER_SETUP.md",
+            root / "codex-skill" / "smart-llm-router" / "SKILL.md",
+            root / "codex-skill" / "hermes-smart-llm-router" / "SKILL.md",
+            root / "hermes-skill" / "model-routing-foundation" / "SKILL.md",
+        ]
+        encoded_workload_examples = (
+            "e6b0b4e5a2a8e5b1b1e6b0b4",
+            "e4bfaee6ada3e68a80e69cafe59fb9e8aeade8bdace58699e7a8bf",
+            "e695b0e68daee5ba93e7b4a2e5bc95e4bc98e58c96",
+            "e5a48de59088e7b4a2e5bc95e5ba94e7bb93e59088e69fa5e8afa2e69da1e4bbb6e8aebee8aea1",
+            "e5aea1e8aea1e69eb6e69e84e5b9b6e8aebee8aea1e5a49ae6ada5e9aaa4e4bc98e58c96e696b9e6a188",
+            "e8a784e58892e38081e689a7e8a18ce5b9b6e5aea1e8aea1e7b3bbe7bb9fe58d87e7baa7",
+        )
+        forbidden = tuple(bytes.fromhex(value).decode("utf-8") for value in encoded_workload_examples) + (
+            "smart-llm-router " + "image-generate",
+            "smart-llm-router " + "transcript-correct",
+            "smart-llm-router " + "remote-transcribe",
+            "smart-llm-router " + "transcribe",
+            "smart-llm-router " + "benchmark-vision",
+            "smart-llm-router " + "embed",
+            "smart-llm-router " + "rerank",
+        )
+        violations = []
+        for path in docs:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    violations.append(f"{path.relative_to(root)}:{token}")
+        self.assertEqual(violations, [])
+
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        quickstart_section = readme.split("## 常用命令", 1)[1]
+        quickstart_commands = quickstart_section.split("```bash", 1)[1].split("```", 1)[0]
+        self.assertNotIn("--paid", quickstart_commands)
+        self.assertNotIn("--allow-paid", quickstart_commands)
+        self.assertNotIn("--provider", quickstart_commands)
+
     def test_shipped_files_do_not_contain_private_domain_defaults(self) -> None:
         root = Path(__file__).resolve().parents[1]
         files = [

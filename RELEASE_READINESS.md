@@ -1,5 +1,17 @@
 # Public Release Readiness
 
+## 0.6.0rc2 Public-Surface Correction — 2026-07-20
+
+Status: local correction candidate passed; ready for protected CI, not committed, tagged, or published.
+
+- The public quickstart is limited to router configuration, recommendation, route planning, execution, health, and ledger inspection.
+- Workload-specific prompts, direct paid-provider examples, and peripheral adapter commands were removed from README, packaged Codex/Hermes skills, and provider validation examples.
+- Runtime/account-specific wording was replaced with portable policy language.
+- Public boundary tests prevent the removed workload examples and peripheral commands from returning to shipped documentation.
+- Full local suite passed: 86 tests, bytecode compilation, Gitleaks, working-tree boundary scan, wheel/sdist build, and extracted-sdist boundary scan.
+- Local candidate SHA-256: wheel `6f1884604771742b560bc6213c57b003027605483f0888be7de384f9258fe757`; source distribution `65cb1f39380ed5d91f3af293d8e3ed3080f1eaf30e5374640f5e74dea5cc8a6b`.
+- `v0.6.0rc1` remains immutable historical evidence; this correction will use a new `v0.6.0rc2` tag only after protected CI passes.
+
 ## 0.6.0rc1 Local Candidate — 2026-07-20
 
 Status: ready to commit for protected CI; not committed, pushed, tagged, or published.
