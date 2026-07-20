@@ -1,0 +1,13 @@
+include .env.example
+include CHANGELOG.md
+include CONTRIBUTING.md
+include DEPENDENCY_LICENSES.md
+include PROVIDER_SETUP.md
+include RELEASE_READINESS.md
+include SECURITY.md
+recursive-include bin smart-llm-router
+recursive-include codex-skill *.md
+recursive-include hermes-skill *.md
+recursive-include examples *.json *.cron
+recursive-include .github *.yml
+global-exclude __pycache__ *.py[cod] .DS_Store

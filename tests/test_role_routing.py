@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -17,6 +18,43 @@ class RoleRoutingTests(unittest.TestCase):
             empty_pool_refresh_timeout=1,
             empty_pool_refresh_limit=1,
         )
+
+    def test_declared_candidate_is_excluded_until_qualified(self) -> None:
+        provider = LLMProvider(
+            "nvidia-google-free",
+            "https://nvidia.test/v1",
+            "NVIDIA_KEY",
+            ("google/gemma-3n-e4b-it",),
+            True,
+            1,
+            "trial_quota",
+        )
+        rotated_provider = LLMProvider(
+            "nvidia-google-free-key2",
+            provider.base_url,
+            "NVIDIA_KEY_2",
+            provider.models,
+            True,
+            2,
+            "trial_quota",
+        )
+        settings = self._settings((provider, rotated_provider))
+        adapters = settings.data_dir / "adapter-lifecycle" / "adapters"
+        adapters.mkdir(parents=True)
+        declaration = {
+            "provider": provider.name,
+            "model": provider.models[0],
+            "current_state": "candidate",
+        }
+        state_path = adapters / "gemma.json"
+        state_path.write_text(json.dumps(declaration), encoding="utf-8")
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test", "NVIDIA_KEY_2": "test"}, clear=True):
+            candidate = recommend_route(settings, task="qa", prompt="只输出 OK", paid_fallback=False)
+            declaration["current_state"] = "qualified"
+            state_path.write_text(json.dumps(declaration), encoding="utf-8")
+            qualified = recommend_route(settings, task="qa", prompt="只输出 OK", paid_fallback=False)
+        self.assertEqual(candidate["recommended_order"], [])
+        self.assertEqual(qualified["recommended_order"][0]["model"], provider.models[0])
 
     def test_frontier_pipeline_uses_independent_model_families(self) -> None:
         providers = (

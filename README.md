@@ -3,7 +3,8 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Version 0.5.0rc2 adds goal-locked workflow planning, quality-band free-first role routing,
+Development candidate 0.6.0rc1 adds evidence-backed task contracts and adapter lifecycle
+governance on top of the 0.5.0rc2 goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
 loading from an optional credential catalog selected with
 `SMART_LLM_CREDENTIAL_CATALOG`. Secret values remain local and in process
@@ -22,9 +23,31 @@ remains a compatibility test surface only.
 ```bash
 smart-llm-router providers
 smart-llm-router capabilities --configured-only
-smart-llm-router contract-plan task-contract.json --receipt-dir ./route-receipts
+smart-llm-router contract-plan examples/task_contract.example.json --receipt-dir ./route-receipts
+smart-llm-router adapter-lifecycle examples/adapter_declaration.example.json examples/adapter_transition.example.json
 smart-llm-router workflow-plan examples/workflow_contract.example.json
 ```
+
+任务契约会严格校验任务族和敏感度。`internal_summary` 只有同时声明
+`sanitized_for_external=true` 与 `external_processing_approved=true` 才允许云端路线；
+`internal_raw` 和 `secret` 继续失败关闭。路由回执使用稳定契约指纹关联任务，
+并可记录 route alias、真实 fallback chain、ledger id，以及经过物化门校验的
+输出路径、大小和 SHA-256。`production_changed` 必须由执行方依据真实变更显式提供，
+不能仅凭执行模式自动推断。
+
+适配器生命周期使用 `discovered -> shadow -> candidate -> qualified -> production -> retired`
+六态治理。`shadow -> candidate` 需要 canary 和最小健康证据；
+`candidate -> qualified` 需要与适配器匹配且已通过的 `promotion-check` 决策；
+`qualified -> production` 还需要 owner 批准、smoke test 和回滚方案。
+降级和退役不被晋级证据门阻塞。命令只生成带指纹的迁移回执，
+不会自动改写 provider 注册表、角色质量档或生产默认。
+显式传入 `--state-dir` 时，工具会在私有运行态中原子保存全部迁移回执，
+并且只在 PASS 后更新适配器声明；目录和文件权限分别收紧为 `0700` 与 `0600`。
+运行态不进入公共源码仓。
+持久化成功的 PASS 回执使用 `next_action=state_change_persisted`，并在落盘回执中
+记录对应的私有声明与回执路径。
+当声明位于当前运行目录的 `adapter-lifecycle/adapters` 时，已声明路线只有
+`qualified` 或 `production` 才进入实际推荐和执行池；未纳入生命周期的旧路线保持兼容。
 
 一个可移植的智能模型路由器：按任务和模态做成本/质量路由，免费池优先但不盲目免费，失败冷却、主动探活、低价付费兜底。适合给多个智能体、脚本、知识库项目复用。
 
@@ -56,6 +79,7 @@ $HOME/.local/state/smart-llm-router
 - 成本/调用账本：记录每次模型调用、失败和缓存命中，便于后续调优。
 - 历史健康真值面：`route-stats` 按任务/provider/model 汇总成功率、失败类型、P95 延迟和观测成本；明确的本地基础设施故障不计入模型失败率。
 - 模型晋级门：`golden-eval` 用任务黄金集对比候选与基线并生成盲审包；`promotion-check` 结合案例、成本、健康样本和独立第三家盲审，只输出可登记资格，不自动修改生产角色表。
+- 通用 QA 候选使用公开、确定性的 `examples/golden-sets/qa-public-v1.json`，五项硬门必须全部通过；该筛选不替代生产角色所需的基线和独立盲审。
 - 响应缓存：相同任务和上下文命中本地缓存，避免重复花 token。
 - 本地检索前置：可从本地 `txt/md` 资料目录检索相关片段，再注入模型上下文。
 - 动态模型发现：OpenRouter、NVIDIA、Groq 候选目录默认每 6 小时按需刷新，单家发现失败会保留上次清单；OpenRouter/NVIDIA 同时发现视觉候选。

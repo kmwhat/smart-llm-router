@@ -87,13 +87,14 @@ class EvaluationTests(unittest.TestCase):
         )
         self.assertTrue(all(item["passed"] for item in results))
 
-    def test_public_role_suites_are_valid_and_have_five_cases(self) -> None:
+    def test_public_golden_suites_are_valid_and_have_five_cases(self) -> None:
         examples = Path(__file__).resolve().parents[1] / "examples" / "golden-sets"
         expected_tasks = {
             "audit-public-v1.json": "audit",
             "plan-public-v1.json": "plan",
             "execute-public-v1.json": "execute",
             "verify-public-v1.json": "verify",
+            "qa-public-v1.json": "qa",
         }
         for filename, task in expected_tasks.items():
             with self.subTest(filename=filename):

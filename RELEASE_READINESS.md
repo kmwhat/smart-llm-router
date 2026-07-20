@@ -1,5 +1,17 @@
 # Public Release Readiness
 
+## 0.6.0rc1 Local Candidate — 2026-07-20
+
+Status: ready to commit for protected CI; not committed, pushed, tagged, or published.
+
+- Package metadata and runtime both report `0.6.0rc1`.
+- A clean Python 3.14 environment installed the wheel, passed `pip check`, and exercised `--help`, `score`, `contract-plan`, and `adapter-lifecycle`.
+- The source distribution now explicitly includes public task-contract, adapter-lifecycle, and QA golden-set examples through `MANIFEST.in`; CI and release workflows assert the required examples are present.
+- Extracted wheel and source-distribution scans found no personal absolute paths, private domain terms, private-key markers, or token patterns; Gitleaks also reported no leaks.
+- Local candidate SHA-256: wheel `7fbfeba7a51a4aa2e9149e2f70eba83cc93b00e9a276b2369d1fb7bbebc4444f`; source distribution `2b8180312410808dccadaafb710f1195ec3c3be4fc4838c55657bdad16183e22`.
+- These local hashes are audit evidence only. Release automation must rebuild and attest its own artifacts.
+- Remaining publication gates: review and commit the intended scope, push through protected Python 3.10-3.14 and `package-smoke` CI, then explicitly approve the release tag.
+
 Candidate: `0.5.0rc2`
 
 Prepared: 2026-07-18

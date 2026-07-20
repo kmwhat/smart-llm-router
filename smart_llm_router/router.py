@@ -1052,9 +1052,31 @@ def describe_choice_capability(choice: LLMChoice) -> dict[str, Any]:
     }
 
 
+def _adapter_lifecycle_route_allowed(settings: Settings, choice: LLMChoice) -> bool:
+    adapters_dir = settings.data_dir / "adapter-lifecycle" / "adapters"
+    if not adapters_dir.is_dir():
+        return True
+    for path in adapters_dir.glob("*.json"):
+        payload = _load_json(path)
+        if not isinstance(payload, dict):
+            continue
+        declared_provider = re.sub(r"-key\d+$", "", str(payload.get("provider") or "").lower())
+        choice_provider = re.sub(r"-key\d+$", "", choice.provider.name.lower())
+        if (
+            declared_provider == choice_provider
+            and str(payload.get("model") or "").lower() == choice.model.lower()
+        ):
+            return str(payload.get("current_state") or "").lower() in {"qualified", "production"}
+    return True
+
+
 def _model_choices(settings: Settings, *, task: str, only_free: bool) -> list[LLMChoice]:
     task = normalize_task_type(task)
-    choices = configured_models(settings, only_free=only_free)
+    choices = [
+        choice
+        for choice in configured_models(settings, only_free=only_free)
+        if _adapter_lifecycle_route_allowed(settings, choice)
+    ]
     if task in VISION_TASKS:
         choices = [choice for choice in choices if _is_vision_choice(choice)]
     elif task == "embed":

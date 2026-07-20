@@ -1,0 +1,13 @@
+{
+  "schema": "smart_llm_router.adapter_transition_request.v1",
+  "target_state": "candidate",
+  "reason": "public canary and initial health evidence passed",
+  "health_evidence": {
+    "canary_passed": true,
+    "health_samples": 3,
+    "degraded": false
+  },
+  "owner_approved": false,
+  "smoke_test_passed": false,
+  "rollback_plan": ""
+}
