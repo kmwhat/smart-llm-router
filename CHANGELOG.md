@@ -4,9 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-Target candidate: `0.6.0rc1`.
+Target candidate: `0.6.0rc2`.
 
 ### Changed
+
+- Reduced the public quickstart to core router operations: configuration, recommendation, route planning, execution, health, and ledger inspection.
+- Removed workload-specific prompts, direct paid-provider examples, and peripheral adapter commands from public common-command and validation sections.
+- Replaced local runtime/account wording with portable public policy language.
 
 - Hardened task contracts with a strict task-family allowlist and explicit sanitization plus approval gates before `internal_summary` may use cloud routes.
 - Linked route receipts to stable contract fingerprints, route aliases, fallback chains, ledger ids, and validated output hashes.

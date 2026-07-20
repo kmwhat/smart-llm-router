@@ -53,8 +53,6 @@ GEMINI_API_KEY=你的 Gemini key
 smart-llm-router providers
 smart-llm-router refresh --timeout 6 --limit 8
 smart-llm-router task "只输出 OK" --task qa --free-only
-smart-llm-router discover-vision --limit 20
-smart-llm-router task "只输出 JSON：判断图片是否包含数据表格" --task vision --image /path/to/image.png --free-only
 ```
 
 `providers` 只显示 `has_key: true/false`，不会输出 key。

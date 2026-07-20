@@ -3147,7 +3147,13 @@ def refresh_model_pool_by_modality(
                         _record_success(settings, choice, states)
                         row.update({"ok": True, "sample": f"embedding_dim={vectors[0]['dimensions']}"})
                     elif task == "rerank":
-                        results, _usage = _call_rerank_compatible(choice, query="数据库索引优化", documents=["复合索引应结合查询条件设计", "今天适合整理文件"], top_n=1, timeout=timeout)
+                        results, _usage = _call_rerank_compatible(
+                            choice,
+                            query="router health check",
+                            documents=["relevant route", "unrelated route"],
+                            top_n=1,
+                            timeout=timeout,
+                        )
                         _record_success(settings, choice, states)
                         score = results[0].get("relevance_score") if results else None
                         row.update({"ok": True, "sample": f"top_score={score}"})
