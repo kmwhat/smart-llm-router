@@ -1469,6 +1469,235 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
     return sum(_estimate_tokens(_message_text_for_estimate(message)) + 4 for message in messages)
 
 
+def describe_task_v2(
+    task: str,
+    prompt: str,
+    context: str | None = None,
+    *,
+    input_modalities: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return an explainable shadow classification without affecting routing."""
+    task = normalize_task_type(task)
+    latest = prompt.strip()
+    text = f"{prompt}\n{context or ''}".strip()
+    lowered = latest.lower()
+    modalities = sorted(set(input_modalities or ["text"]))
+    token_estimate = _estimate_tokens(text) if text else 0
+
+    explicit_simple_intent = bool(re.fullmatch(
+        r"(?:你好|您好|谢谢|感谢|收到|好的?|可以|明白了?|再见|hi|hello|thanks|ok|okay|"
+        r"只(?:输出|回复)\s*[a-z0-9_-]{1,24})[!！。,.，?？\s]*",
+        lowered,
+        flags=re.IGNORECASE,
+    ))
+    context_dependent = bool(re.search(
+        r"(?:刚才|之前|上面|前面|上一轮|前文|上述|按这个|照这个|基于这个)|"
+        r"^(?:继续|接着|下一步|再来|往下|把这个|把那个|把它|修改它|改一下)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    if re.search(
+        r"(?:前文不存在|没有前文)|"
+        r"(?:不要沿用|无需沿用|不(?:要|必)?参考).{0,10}(?:刚才|之前|上面|前文)",
+        latest,
+    ):
+        context_dependent = False
+    requires_tools = bool(re.search(
+        r"(?:运行|执行).{0,12}(?:命令|测试|终端)|(?:读取|查看|修改|检查).{0,12}(?:文件|代码|日志|项目)|"
+        r"(?:调用|使用).{0,8}(?:工具|终端|浏览器)|"
+        r"(?:run|execute).{0,20}(?:command|test)|(?:read|modify|inspect).{0,20}(?:file|code|log|repo)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    negated_tool_mention = bool(re.search(
+        r"(?:不要|无需|不需要|不必|不调用|不使用).{0,16}"
+        r"(?:运行|执行|读取|查看|修改|检查|调用|使用|测试|命令|终端|文件|代码|日志|项目|工具|浏览器)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    if negated_tool_mention:
+        requires_tools = False
+    meta_literal_task = bool(re.search(
+        r"(?:翻译|几个汉字|全称|标题格式|改写得更自然|"
+        r"(?:解释|说明).{0,12}(?:这个词|这个短语|什么是|含义)|"
+        r"列出.{0,12}(?:字|词)|一般性定义|通用.{0,8}建议|概念说明)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    if meta_literal_task:
+        requires_tools = False
+    negative_scope_simple = negated_tool_mention and bool(re.search(
+        r"(?:只|直接).{0,8}(?:写一句|回复|输出|解释|说明)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    simple_intent = explicit_simple_intent or meta_literal_task or negative_scope_simple
+    structured_output = bool(re.search(
+        r"(?:严格|有效|只(?:输出|返回)).{0,12}(?:json|yaml|xml|schema)|"
+        r"(?:结构化输出|json schema|valid json|structured output)",
+        latest,
+        flags=re.IGNORECASE,
+    ))
+    if meta_literal_task:
+        structured_output = False
+    strong_reasoning = task in {"audit", "verify"} or bool(re.search(
+        r"(?:深度分析|深入研究|研究报告|根因分析|严谨推导|证明|安全审计|威胁模型|"
+        r"deep analysis|research report|root cause|rigorous proof|security audit|threat model)",
+        lowered,
+    ))
+    multi_step = bool(re.search(
+        r"(?:多步骤|分阶段|完整流程|端到端|先.+再|第一步|第二步|"
+        r"multi-step|step by step|end-to-end|first.+then)",
+        lowered,
+    ))
+    technical_depth = bool(re.search(
+        r"(?:架构|迁移|部署|并发|协议|工作流|系统设计|兼容性|"
+        r"architecture|migration|deployment|concurrency|protocol|workflow|system design|compatibility)",
+        lowered,
+    ))
+    broad_scope = bool(re.search(
+        r"(?:多文件|跨文件|整个项目|完整项目|完整系统|大规模重构|多个模块|"
+        r"跨团队|数据迁移.{0,20}(?:灾难恢复|回退|验收)|"
+        r"multi-file|cross-file|entire project|complete system|large refactor|multiple modules)",
+        lowered,
+    ))
+    if meta_literal_task:
+        strong_reasoning = False
+        multi_step = False
+        technical_depth = False
+        broad_scope = False
+    constraint_hits = len(re.findall(
+        r"(?:必须|不要|不能|保持|兼容|验证|测试|只允许|最多|至少|限定|"
+        r"must|without|keep|compatible|verify|validate|at most|at least)",
+        lowered,
+    ))
+    non_text = [item for item in modalities if item != "text"]
+
+    signal_values = {
+        "simple_intent": -0.22 if simple_intent else 0.0,
+        "reasoning_depth": 0.22 if strong_reasoning else 0.0,
+        "multi_step": 0.12 if multi_step else 0.0,
+        "technical_depth": 0.10 if technical_depth else 0.0,
+        "scope": 0.16 if broad_scope else 0.0,
+        "constraints": min(0.12, constraint_hits * 0.03),
+        "context_length": 0.10 if token_estimate > 12_000 else 0.06 if token_estimate > 4_500 else 0.0,
+        "tool_requirement": 0.08 if requires_tools else 0.0,
+        "structured_output": 0.06 if structured_output else 0.0,
+        "input_modality": 0.06 if non_text else 0.0,
+    }
+    normalized_score = max(0.0, min(1.0, 0.38 + sum(signal_values.values())))
+    initial_tier = "simple" if normalized_score < 0.30 else "balanced" if normalized_score < 0.65 else "deep"
+
+    floor_reasons: list[str] = []
+    minimum_tier = "simple"
+    if strong_reasoning or broad_scope:
+        minimum_tier = "deep"
+        floor_reasons.append("strong_reasoning_or_broad_scope")
+    elif context_dependent or requires_tools or structured_output or non_text:
+        minimum_tier = "balanced"
+        if context_dependent:
+            floor_reasons.append("context_dependent")
+        if requires_tools:
+            floor_reasons.append("tools_required")
+        if structured_output:
+            floor_reasons.append("structured_output_required")
+        if non_text:
+            floor_reasons.append("non_text_input")
+
+    simple_exclusions = [
+        reason
+        for condition, reason in (
+            (not simple_intent, "no_explicit_simple_intent"),
+            (context_dependent, "context_dependent"),
+            (requires_tools, "tools_required"),
+            (structured_output, "structured_output_required"),
+            (bool(non_text), "non_text_input"),
+            (strong_reasoning or multi_step or technical_depth or broad_scope, "complex_signal"),
+        )
+        if condition
+    ]
+    simple_eligible = simple_intent and not simple_exclusions
+    tier_rank = {"simple": 0, "balanced": 1, "deep": 2}
+    selected_tier = max((initial_tier, minimum_tier), key=tier_rank.__getitem__)
+    distance = min(abs(normalized_score - 0.30), abs(normalized_score - 0.65))
+    confidence = round(0.5 + 0.5 * (1 - math.exp(-12 * distance)), 3)
+    ambiguity_fallback = confidence < 0.65 and tier_rank[minimum_tier] <= tier_rank["balanced"]
+    if simple_eligible:
+        selected_tier = "simple"
+        confidence = 0.95
+        ambiguity_fallback = False
+    elif ambiguity_fallback:
+        selected_tier = "balanced"
+
+    return {
+        "schema": "smart_llm_router.task_descriptor.v2",
+        "mode": "shadow",
+        "classification_version": "task-signals-v2-shadow",
+        "input_fingerprint": sha256(text.encode("utf-8")).hexdigest()[:16],
+        "normalized_score": round(normalized_score, 3),
+        "initial_tier": initial_tier,
+        "minimum_tier": minimum_tier,
+        "selected_tier": selected_tier,
+        "confidence": confidence,
+        "ambiguity_fallback": ambiguity_fallback,
+        "floor_reasons": floor_reasons,
+        "simple_eligibility": {
+            "eligible": simple_eligible,
+            "exclusions": simple_exclusions,
+        },
+        "features": {
+            "context_dependent": context_dependent,
+            "requires_tools": requires_tools,
+            "structured_output_required": structured_output,
+            "input_modalities": modalities,
+            "estimated_input_tokens": token_estimate,
+        },
+        "signals": [
+            {"name": name, "contribution": round(value, 3), "triggered": value != 0}
+            for name, value in signal_values.items()
+        ],
+        "routing_effect": "none",
+    }
+
+
+def _apply_task_descriptor_v2_activation(
+    task: str,
+    complexity: dict[str, Any],
+    descriptor: dict[str, Any],
+) -> dict[str, Any]:
+    requested = os.getenv("SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    eligible = task not in ROLE_TASKS
+    applied = requested and eligible
+    legacy_label = complexity.get("legacy_label", complexity["label"])
+    descriptor["routing_effect"] = "non_role_complexity" if applied else "none"
+    descriptor["mode"] = "controlled" if applied else "shadow"
+    complexity["label"] = (
+        {"simple": "simple", "balanced": "medium", "deep": "hard"}[descriptor["selected_tier"]]
+        if applied
+        else legacy_label
+    )
+    complexity["legacy_label"] = legacy_label
+    complexity["complexity_source"] = "task_descriptor_v2" if applied else "legacy"
+    complexity["activation"] = {
+        "env": "SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED",
+        "requested": requested,
+        "eligible": eligible,
+        "applied": applied,
+        "rollback": "unset_or_set_false",
+    }
+    complexity["policy"] = (
+        "free-only preferred"
+        if complexity["label"] == "simple"
+        else "free-first with paid fallback"
+        if complexity["label"] == "medium"
+        else "free-first, allow stronger fallback"
+    )
+    complexity["shadow_descriptor_v2"] = descriptor
+    return complexity
+
+
 def score_task_complexity(task: str, prompt: str, context: str | None = None) -> dict[str, Any]:
     task = normalize_task_type(task)
     text = (prompt + "\n" + (context or "")).strip()
@@ -1501,7 +1730,7 @@ def score_task_complexity(task: str, prompt: str, context: str | None = None) ->
     score += min(3, hard_hits)
     score -= min(2, simple_hits)
     label = "simple" if score <= 0 else "medium" if score <= 2 else "hard"
-    return {
+    complexity = {
         "label": label,
         "score": score,
         "token_estimate": token_estimate,
@@ -1509,6 +1738,11 @@ def score_task_complexity(task: str, prompt: str, context: str | None = None) ->
         "simple_hits": simple_hits,
         "policy": "free-only preferred" if label == "simple" else "free-first with paid fallback" if label == "medium" else "free-first, allow stronger fallback",
     }
+    return _apply_task_descriptor_v2_activation(
+        task,
+        complexity,
+        describe_task_v2(task, prompt, context),
+    )
 
 
 def _cache_enabled() -> bool:
@@ -1529,6 +1763,9 @@ def _cache_key(
     avoid_routes: list[str] | tuple[str, ...] | None = None,
     quality_target: str = "production",
     privacy: str = "external_allowed",
+    complexity_label: str = "",
+    complexity_source: str = "legacy",
+    complexity_version: str = "",
 ) -> str:
     payload = {
         "task": task,
@@ -1543,6 +1780,9 @@ def _cache_key(
         "avoid_routes": sorted(_avoid_route_set(avoid_routes)),
         "quality_target": quality_target,
         "privacy": privacy,
+        "complexity_label": complexity_label,
+        "complexity_source": complexity_source,
+        "complexity_version": complexity_version,
     }
     return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -1551,6 +1791,23 @@ def _text_fingerprint(text: str | None) -> str:
     if not text:
         return ""
     return sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _required_structured_output_format(complexity: dict[str, Any], prompt: str) -> str | None:
+    features = complexity.get("shadow_descriptor_v2", {}).get("features", {})
+    if features.get("structured_output_required") and "json" in prompt.lower():
+        return "json"
+    return None
+
+
+def _validate_structured_output(content: str, required_format: str | None) -> tuple[bool, str | None]:
+    if required_format != "json":
+        return True, None
+    try:
+        json.loads(content.strip())
+    except (json.JSONDecodeError, TypeError):
+        return False, "strict_json_parse_failed"
+    return True, None
 
 
 def _load_response_cache(settings: Settings) -> dict[str, Any]:
@@ -2134,6 +2391,16 @@ def infer_task_descriptor(
         inferred_output = ["embedding"]
     if task == "rerank":
         inferred_output = ["score"]
+    complexity = _apply_task_descriptor_v2_activation(
+        task,
+        complexity,
+        describe_task_v2(
+            task,
+            prompt,
+            context,
+            input_modalities=inferred_input,
+        ),
+    )
     if not risk:
         if quality_target in {"production", "audit", "frontier"} or complexity["label"] == "hard" or task in {"audit", "verify", "transcript_correct"}:
             risk = "high" if complexity["label"] == "hard" else "medium"
@@ -3316,6 +3583,9 @@ def run_llm_task(
         avoid_routes=avoid_routes,
         quality_target=quality_target,
         privacy=privacy_mode,
+        complexity_label=complexity["label"],
+        complexity_source=complexity["complexity_source"],
+        complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
     )
     cache_debug = {
         "cache_key": cache_key[:16],
@@ -3332,9 +3602,34 @@ def run_llm_task(
         "max_cost_usd": max_cost_usd,
         "preprocess": _preprocess_ledger_summary(preprocessing) if preprocessing else None,
     }
+    required_output_format = _required_structured_output_format(complexity, prompt)
     if _cache_enabled():
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
+        if isinstance(cached, dict) and cached.get("content"):
+            output_valid, output_error = _validate_structured_output(str(cached["content"]), required_output_format)
+            if not output_valid:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "cache_output_rejected",
+                        "task": task,
+                        "provider": cached.get("provider"),
+                        "model": cached.get("model"),
+                        "free": cached.get("free"),
+                        "complexity": complexity,
+                        "cache_debug": cache_debug,
+                        "required_output_format": required_output_format,
+                        "output_error": output_error,
+                        "input_tokens_est": 0,
+                        "output_tokens_est": 0,
+                        "estimated_cost_usd": 0.0,
+                    },
+                )
+                cache.pop(cache_key, None)
+                _save_response_cache(settings, cache)
+                cached = None
         if isinstance(cached, dict) and cached.get("content"):
             ledger_id = _append_ledger(
                 settings,
@@ -3425,9 +3720,35 @@ def run_llm_task(
                 temperature=temperature,
                 max_tokens=_max_output_tokens_for_budget(choice, input_tokens_est, max_cost_usd),
             )
-            _record_success(settings, choice, states)
             output_tokens_est = int(usage.get("completion_tokens") or _estimate_tokens(content))
             input_tokens = int(usage.get("prompt_tokens") or input_tokens_est)
+            output_valid, output_error = _validate_structured_output(content, required_output_format)
+            if not output_valid:
+                errors.append(f"{choice.provider.name}/{choice.model}: {output_error}")
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "model_output_rejected",
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "free": choice.provider.free,
+                        "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+                        "quality_target": quality_target,
+                        "privacy": privacy_mode,
+                        "complexity": complexity,
+                        "cache_debug": cache_debug,
+                        "required_output_format": required_output_format,
+                        "output_error": output_error,
+                        "latency_s": round(time.perf_counter() - started, 3),
+                        "input_tokens_est": input_tokens,
+                        "output_tokens_est": output_tokens_est,
+                        "estimated_cost_usd": _estimated_cost_usd(choice, input_tokens, output_tokens_est),
+                    },
+                )
+                continue
+            _record_success(settings, choice, states)
             ledger_id = _append_ledger(
                 settings,
                 {

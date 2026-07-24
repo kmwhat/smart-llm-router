@@ -3,8 +3,9 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Development candidate 0.6.0rc2 adds evidence-backed task contracts and adapter lifecycle
-governance on top of the 0.5.0rc2 goal-locked workflow planning, quality-band free-first role routing,
+Development candidate 0.6.0rc3 adds a controlled task descriptor v2, cache isolation,
+and strict JSON output validation on top of the 0.6.0rc2 evidence-backed task contracts,
+adapter lifecycle governance, goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
 loading from an optional credential catalog selected with
 `SMART_LLM_CREDENTIAL_CATALOG`. Secret values remain local and in process
@@ -134,6 +135,13 @@ smart-llm-router route-stats --task qa --limit 1000
 正常的 `recommend`、`route-plan` 和 `task` 会在免费模型目录过期时按需发现新候选。可用
 `SMART_LLM_AUTO_DISCOVER_FREE=false` 关闭，或用 `SMART_LLM_DISCOVERY_TTL_HOURS` 调整刷新周期；
 `maintain` 仍用于重要任务前的完整“发现 + 分模态探活”。
+
+实验性任务描述器 v2 默认关闭。显式设置
+`SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED=true` 后，它只影响非角色任务的复杂度标签；
+`plan`、`execute`、`audit`、`verify`、`quality_enhance` 仍保持原角色质量档。
+删除该变量或设为 `false` 即回退，隐私、生命周期、健康、预算和 `quality_target` 门不变。
+当任务明确要求严格 JSON 时，响应必须可被本地 JSON 解析器直接读取；Markdown 围栏等不合格输出不会缓存或返回，
+路由器会尝试下一条合格路线，全部不合格则失败关闭。
 
 最小执行验证：
 

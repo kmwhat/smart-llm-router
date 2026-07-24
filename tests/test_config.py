@@ -8,6 +8,27 @@ from smart_llm_router.config import load_settings
 
 
 class ConfigTests(unittest.TestCase):
+    def test_process_environment_overrides_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "SMART_LLM_RUNTIME_DIR=/from/env-file\n"
+                "SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED=true\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "SMART_LLM_RUNTIME_DIR": "/from/process",
+                    "SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED": "false",
+                },
+                clear=True,
+            ):
+                settings = load_settings(str(env_file))
+                activation = os.environ["SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED"]
+            self.assertEqual(settings.data_dir, Path("/from/process"))
+            self.assertEqual(activation, "false")
+
     def test_runtime_dir_overrides_legacy_data_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
