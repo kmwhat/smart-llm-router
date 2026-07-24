@@ -2,20 +2,21 @@
 
 ## 0.6.0rc3 Task Descriptor v2 Candidate — 2026-07-24
 
-Status: local candidate passed; ready for protected CI, not committed, pushed, tagged, or published.
+Status: release baseline locked to protected `main` commit `48484a8e78568a740bd18fd2962d065800ab9567`; publication state is represented by the external Git tag and GitHub Release, not inferred from this source snapshot.
 
-- Package metadata and runtime both report `0.6.0rc3`; the public installation link continues to point to the actually released `v0.6.0rc2`.
+- Package metadata, runtime, changelog, and public installation link all report `0.6.0rc3`.
 - Task descriptor v2 remains default off, affects only non-role complexity when explicitly enabled, and has a one-step rollback.
 - Response-cache keys separate legacy and v2 decisions by effective complexity label, classifier source, and classifier version.
 - Explicit process-environment values take precedence over `.env`, keeping activation and rollback deterministic.
 - Strict JSON requests reject fenced or otherwise non-parseable responses, try the next eligible route, and fail closed without globally cooling a healthy endpoint.
-- The complete local suite passed with 105 tests, bytecode compilation, public-boundary checks, and Gitleaks.
+- The complete local suite passed with 106 tests, bytecode compilation, public-boundary checks, and Gitleaks.
 - The first source archive exposed a missing-fixture gate: it included `test_task_descriptor_v2.py` but not its JSON fixtures. `MANIFEST.in` now includes public test JSON, and the rebuilt sdist passed all 105 tests after extraction.
 - Extracted wheel and sdist scans found no personal absolute paths, private domain terms, runtime files, private-key markers, token patterns, or Gitleaks findings.
 - A clean Python 3.14 environment installed the wheel with dependencies, passed `pip check`, matched runtime/distribution versions, and exercised help, default-off scoring, explicit v2 scoring, and route planning.
 - The global launcher passed help, score, and read-only recommendation cold starts with `/dev/null` configuration and an isolated runtime.
 - Final local artifact hashes are recorded outside the package in the SkillCenter acceptance receipt so the source archive does not contain a self-referential checksum.
-- Remaining gates: intentional scope review, commit, protected Python 3.10-3.14 and package-smoke CI, review, merge, and explicit release authorization.
+- Completed gates: intentional scope review, protected Python 3.10-3.14 and package-smoke CI, independent review, and merge-tree verification.
+- Release automation must still verify that the tag matches the package version, rebuild and test artifacts, generate checksums and attestations, and publish a prerelease.
 
 ## 0.6.0rc2 Public-Surface Correction — 2026-07-20
 

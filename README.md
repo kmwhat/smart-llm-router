@@ -3,7 +3,7 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Development candidate 0.6.0rc3 adds a controlled task descriptor v2, cache isolation,
+Current prerelease 0.6.0rc3 adds a controlled task descriptor v2, cache isolation,
 and strict JSON output validation on top of the 0.6.0rc2 evidence-backed task contracts,
 adapter lifecycle governance, goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
@@ -95,7 +95,7 @@ $HOME/.local/state/smart-llm-router
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.6.0rc2/smart_llm_router-0.6.0rc2-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.6.0rc3/smart_llm_router-0.6.0rc3-py3-none-any.whl"
 smart-llm-router --help
 ```
 
