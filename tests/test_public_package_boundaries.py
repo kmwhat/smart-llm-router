@@ -1,10 +1,24 @@
 import unittest
 from pathlib import Path
 
+from smart_llm_router import __version__
 from smart_llm_router.router import _clean_transcript_locally
 
 
 class PublicPackageBoundaryTests(unittest.TestCase):
+    def test_release_metadata_matches_package_version(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        readiness = (root / "RELEASE_READINESS.md").read_text(encoding="utf-8")
+        self.assertIn(
+            f"/releases/download/v{__version__}/smart_llm_router-{__version__}-py3-none-any.whl",
+            readme,
+        )
+        self.assertIn(f"## {__version__} - ", changelog)
+        current_readiness = readiness.split("## 0.6.0rc2", 1)[0]
+        self.assertNotIn("not committed, pushed, tagged, or published", current_readiness)
+
     def test_shipped_docs_keep_quickstart_router_core_only(self) -> None:
         root = Path(__file__).resolve().parents[1]
         docs = [
