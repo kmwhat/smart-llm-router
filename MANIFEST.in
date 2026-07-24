@@ -9,5 +9,6 @@ recursive-include bin smart-llm-router
 recursive-include codex-skill *.md
 recursive-include hermes-skill *.md
 recursive-include examples *.json *.cron
+recursive-include tests *.json
 recursive-include .github *.yml
 global-exclude __pycache__ *.py[cod] .DS_Store

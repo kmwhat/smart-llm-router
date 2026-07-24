@@ -189,9 +189,9 @@ def _load_providers() -> tuple[LLMProvider, ...]:
 
 def load_settings(env_file: str | None = None, credential_catalog: str | None = None) -> Settings:
     if env_file:
-        load_dotenv(env_file, override=True)
+        load_dotenv(env_file, override=False)
     else:
-        load_dotenv(override=True)
+        load_dotenv(override=False)
     catalog_summary = None
     catalog_path = credential_catalog or os.getenv("SMART_LLM_CREDENTIAL_CATALOG", "").strip()
     if catalog_path:

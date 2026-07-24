@@ -4,9 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-Target candidate: `0.6.0rc2`.
+Target candidate: `0.6.0rc3`.
 
 ### Changed
+
+- Added a default-off task descriptor v2 that can affect only non-role task complexity; production roles retain their existing quality floors.
+- Added explicit activation receipts and one-step rollback through `SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED=false` or by unsetting the variable.
+- Isolated response-cache keys by effective complexity label, classifier source, and classifier version.
+- Preserved explicit process-environment overrides over `.env`, so controlled activation and rollback remain reliable.
+- Required directly parseable JSON when a task explicitly requests strict JSON; rejected model or cached output now falls through without globally cooling a healthy endpoint.
 
 - Reduced the public quickstart to core router operations: configuration, recommendation, route planning, execution, health, and ledger inspection.
 - Removed workload-specific prompts, direct paid-provider examples, and peripheral adapter commands from public common-command and validation sections.
