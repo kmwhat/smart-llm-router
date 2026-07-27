@@ -555,6 +555,29 @@ def _template_provider_for_family(settings: Settings, family: str, source: str =
     return sorted(matching or free_candidates, key=lambda provider: (provider.priority, provider.name))[0]
 
 
+def _template_providers_for_discovered_family(
+    settings: Settings,
+    family: str,
+    source: str = "",
+) -> list[LLMProvider]:
+    """Return the selected discovery template and its credential rotations."""
+    template = _template_provider_for_family(settings, family, source)
+    if not template:
+        return []
+    base_name = re.sub(r"-key\d+$", "", template.name.lower())
+    return sorted(
+        [
+            provider
+            for provider in settings.providers
+            if provider.free
+            and re.sub(r"-key\d+$", "", provider.name.lower()) == base_name
+            and provider.base_url == template.base_url
+            and os.getenv(provider.api_key_env, "").strip()
+        ],
+        key=lambda provider: (provider.priority, provider.name),
+    )
+
+
 def _load_discovered_free_models(settings: Settings) -> dict[str, list[dict[str, Any]]]:
     raw = _load_json(_discovered_free_path(settings))
     if not isinstance(raw, dict):
@@ -797,30 +820,35 @@ def configured_models(settings: Settings, *, only_free: bool = False) -> list[LL
         existing = {(choice.provider.name, choice.model) for choice in choices}
         for family, items in discovered.items():
             for item in items:
-                template = _template_provider_for_family(settings, family, str(item.get("source") or ""))
-                if not template:
+                templates = _template_providers_for_discovered_family(
+                    settings,
+                    family,
+                    str(item.get("source") or ""),
+                )
+                if not templates:
                     continue
                 model = str(item.get("id") or "").strip()
                 if not model:
                     continue
-                key = (template.name, model)
-                if key in existing:
-                    continue
-                choices.append(
-                    LLMChoice(
-                        provider=LLMProvider(
-                            name=template.name,
-                            base_url=template.base_url,
-                            api_key_env=template.api_key_env,
-                        models=(model,),
-                        free=True,
-                        priority=template.priority,
-                        billing_class=template.billing_class,
-                    ),
-                    model=model,
-                )
-                )
-                existing.add(key)
+                for template in templates:
+                    key = (template.name, model)
+                    if key in existing:
+                        continue
+                    choices.append(
+                        LLMChoice(
+                            provider=LLMProvider(
+                                name=template.name,
+                                base_url=template.base_url,
+                                api_key_env=template.api_key_env,
+                                models=(model,),
+                                free=True,
+                                priority=template.priority,
+                                billing_class=template.billing_class,
+                            ),
+                            model=model,
+                        )
+                    )
+                    existing.add(key)
     return choices
 
 
@@ -4044,6 +4072,49 @@ def discover_openrouter_vision_free(limit: int = 20) -> list[dict[str, Any]]:
     return rows[:limit]
 
 
+def _nvidia_general_chat_candidate(model_id: str) -> bool:
+    """Keep NVIDIA discovery out of specialist-only and non-chat lanes."""
+    text = model_id.lower()
+    specialist_terms = (
+        "embed",
+        "bge-",
+        "retriever",
+        "rerank",
+        "rankqa",
+        "reward",
+        "guard",
+        "safety",
+        "detector",
+        "detection",
+        "parse",
+        "nvclip",
+        "deplot",
+        "fuyu",
+        "kosmos",
+        "vision",
+        "-vl",
+        "multimodal",
+        "omni",
+        "vila",
+        "neva",
+        "diffusion",
+        "flux",
+        "image",
+        "video",
+        "cosmos",
+        "calibration",
+        "translate",
+        "whisper",
+        "speech",
+        "audio",
+        "palmyra-fin",
+        "palmyra-med",
+    )
+    if any(term in text for term in specialist_terms):
+        return False
+    return not _model_mentions_vision({"id": model_id})
+
+
 def discover_nvidia_models(limit: int = 50) -> list[dict[str, Any]]:
     key = os.getenv("NVIDIA_API_KEY", "").strip()
     if not key:
@@ -4052,7 +4123,23 @@ def discover_nvidia_models(limit: int = 50) -> list[dict[str, Any]]:
         response = client.get("https://integrate.api.nvidia.com/v1/models", headers={"Authorization": f"Bearer {key}"})
         response.raise_for_status()
         data = response.json()
-    return [{"provider": "nvidia", "id": model.get("id") or model.get("name") or "", "object": model.get("object") or "", "owned_by": model.get("owned_by") or "", "free_signal": "available in NVIDIA NIM account"} for model in (data.get("data") or [])[:limit]]
+    rows = []
+    for model in data.get("data") or []:
+        model_id = str(model.get("id") or model.get("name") or "").strip()
+        if not model_id or not _nvidia_general_chat_candidate(model_id):
+            continue
+        rows.append(
+            {
+                "provider": "nvidia",
+                "id": model_id,
+                "object": model.get("object") or "",
+                "owned_by": model.get("owned_by") or "",
+                "billing_class": "trial_quota",
+                "model_mode": "text_or_code_candidate",
+                "free_signal": "visible NVIDIA Developer API endpoint; runtime probe required",
+            }
+        )
+    return rows[:limit]
 
 
 def discover_ark_models(limit: int = 100) -> list[dict[str, Any]]:

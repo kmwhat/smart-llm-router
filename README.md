@@ -85,6 +85,8 @@ $HOME/.local/state/smart-llm-router
 - 响应缓存：相同任务和上下文命中本地缓存，避免重复花 token。
 - 本地检索前置：可从本地 `txt/md` 资料目录检索相关片段，再注入模型上下文。
 - 动态模型发现：OpenRouter、NVIDIA、Groq 候选目录默认每 6 小时按需刷新，单家发现失败会保留上次清单；OpenRouter/NVIDIA 同时发现视觉候选。
+- NVIDIA 免费端点按 `trial_quota` 管理：目录可见不等于调用成功或生产许可；通用文本/代码候选与视觉、embedding、rerank、安全、reward、检测、解析等专用模型隔离，实际调用前仍需健康探针。
+- 动态发现的 NVIDIA 候选继承同供应商多 key 轮换；某个 key 对具体模型返回 401/403 时可尝试下一条已配置路线，但不会把鉴权失败冒充为模型故障或免费保证。
 - 发现不等于生产晋级：新免费模型可进入通用任务池，规划、执行、审计和复验仍须通过基准测试并登记质量档。
 - 按模态健康检查：`refresh-modalities` 会分别用 text/vision/OCR/transcript/code 小探针验证模型，而不只用通用 QA。
 - 可迁移：`.env` + 本目录即可复制到其他电脑。
