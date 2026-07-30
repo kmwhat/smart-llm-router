@@ -18,6 +18,16 @@ PROVIDER_ENV = {
     "groq": "GROQ_API_KEY",
 }
 
+# Provider-specific prefixes and shapes prevent nearby labels, account ids,
+# and model names from becoming credential rotation routes. Providers without
+# a stable shape keep the conservative generic parser for compatibility.
+PROVIDER_SECRET_PATTERNS = {
+    "qwen": re.compile(r"sk-[A-Za-z0-9_.-]{16,}"),
+    "openrouter": re.compile(r"sk-or-v1-[A-Za-z0-9_-]{20,}"),
+    "nvidia": re.compile(r"nvapi-[A-Za-z0-9_-]{20,}"),
+    "groq": re.compile(r"gsk_[A-Za-z0-9_-]{20,}"),
+}
+
 HEADING_PATTERNS = (
     ("deepseek", re.compile(r"deepseek", re.I)),
     ("qwen", re.compile(r"qwen|通义千问", re.I)),
@@ -59,6 +69,13 @@ def _looks_like_secret(line: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9_.:/+\-=]+", line))
 
 
+def _looks_like_provider_secret(provider: str, line: str) -> bool:
+    if not _looks_like_secret(line):
+        return False
+    pattern = PROVIDER_SECRET_PATTERNS.get(provider)
+    return pattern.fullmatch(line) is not None if pattern else True
+
+
 def load_model_credential_catalog(path: str | Path, *, override: bool = True) -> CredentialCatalogSummary:
     """Load only model-provider credentials from the user's free-form catalog.
 
@@ -88,7 +105,7 @@ def load_model_credential_catalog(path: str | Path, *, override: bool = True) ->
         if current == "doubao" and endpoint:
             endpoint_ids.append(endpoint.group(0))
             continue
-        if current and _looks_like_secret(line):
+        if current and _looks_like_provider_secret(current, line) and line not in values[current]:
             values[current].append(line)
 
     for provider, env_name in PROVIDER_ENV.items():
