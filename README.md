@@ -3,8 +3,9 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Current prerelease 0.6.0rc3 adds a controlled task descriptor v2, cache isolation,
-and strict JSON output validation on top of the 0.6.0rc2 evidence-backed task contracts,
+The 0.6.0 stable candidate adds credential-catalog hardening and dotted Qwen key
+support on top of the controlled task descriptor v2, cache isolation,
+strict JSON output validation, and evidence-backed task contracts,
 adapter lifecycle governance, goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
 loading from an optional credential catalog selected with
@@ -90,12 +91,12 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-从当前 GitHub 预发布包安装：
+从当前 GitHub 发布包安装：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.6.0rc3/smart_llm_router-0.6.0rc3-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.6.0/smart_llm_router-0.6.0-py3-none-any.whl"
 smart-llm-router --help
 ```
 

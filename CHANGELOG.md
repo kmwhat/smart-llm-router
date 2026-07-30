@@ -4,6 +4,20 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.6.0 - 2026-07-30
+
+### Security
+
+- Restricted Qwen, OpenRouter, NVIDIA, and Groq credential-catalog entries to
+  provider-specific key shapes so nearby labels and account identifiers cannot
+  become rotation routes.
+- Deduplicated repeated credentials within a provider section.
+
+### Fixed
+
+- Accepted dotted Qwen key formats while retaining the `sk-` prefix and
+  provider-section boundary.
+
 ## 0.6.0rc3 - 2026-07-24
 
 ### Changed

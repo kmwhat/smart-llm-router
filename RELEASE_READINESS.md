@@ -1,5 +1,26 @@
 # Public Release Readiness
 
+## 0.6.0 Credential Catalog Hardening Candidate — 2026-07-30
+
+Status: local candidate complete; protected CI and publication authorization remain pending.
+
+- Package metadata, runtime version, changelog, and public installation link report `0.6.0`.
+- The public diff is limited to credential-catalog hardening, dotted Qwen key
+  compatibility, synthetic tests, and matching release metadata.
+- Provider-specific shapes reject nearby labels and account identifiers, while
+  repeated credentials are deduplicated before rotation slots are created.
+- Tests use synthetic credentials only; local catalogs, private environments,
+  runtime ledgers, and account-specific paths are excluded from the source and
+  distribution artifacts.
+- The clean `origin/main` candidate passed the complete local suite, bytecode
+  compilation, public-boundary tests, working-tree Gitleaks, wheel installation,
+  `pip check`, CLI help, and installed dotted-Qwen parser smoke tests.
+- Extracted wheel and source distribution scans found no personal paths,
+  credential-catalog filenames, plaintext secret patterns, or Gitleaks findings.
+- Release automation must rebuild and attest artifacts from the protected tag.
+- Commit, push, tag, release creation, and retirement of the previous
+  prerelease require separate explicit authorization.
+
 ## 0.6.0rc3 Task Descriptor v2 Candidate — 2026-07-24
 
 Status: release baseline locked to protected `main` commit `48484a8e78568a740bd18fd2962d065800ab9567`; publication state is represented by the external Git tag and GitHub Release, not inferred from this source snapshot.
