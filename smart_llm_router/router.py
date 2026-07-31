@@ -1945,6 +1945,9 @@ def _cache_enabled() -> bool:
     return os.getenv("SMART_LLM_CACHE", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+CACHE_POLICY_VERSION = "cache-policy-v2"
+
+
 def _cache_key(
     *,
     task: str,
@@ -1959,11 +1962,14 @@ def _cache_key(
     avoid_routes: list[str] | tuple[str, ...] | None = None,
     quality_target: str = "production",
     privacy: str = "external_allowed",
+    allow_external: bool = False,
+    max_cost_usd: float | None = None,
     complexity_label: str = "",
     complexity_source: str = "legacy",
     complexity_version: str = "",
 ) -> str:
     payload = {
+        "cache_policy_version": CACHE_POLICY_VERSION,
         "task": task,
         "prompt": prompt,
         "context": context or "",
@@ -1976,6 +1982,8 @@ def _cache_key(
         "avoid_routes": sorted(_avoid_route_set(avoid_routes)),
         "quality_target": quality_target,
         "privacy": privacy,
+        "allow_external": allow_external,
+        "max_cost_usd": max_cost_usd,
         "complexity_label": complexity_label,
         "complexity_source": complexity_source,
         "complexity_version": complexity_version,
@@ -2018,6 +2026,52 @@ def _save_response_cache(settings: Settings, cache: dict[str, Any]) -> None:
         ordered = sorted(cache.items(), key=lambda item: item[1].get("created_at", ""))
         cache = dict(ordered[-max_items:])
     _cache_path(settings).write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _cached_choice_policy_status(
+    settings: Settings,
+    cached: dict[str, Any],
+    *,
+    task: str,
+    prefer_free: bool,
+    paid_fallback: bool,
+    provider: str | None,
+    model: str | None,
+    quality_target: str,
+    privacy: str,
+    allow_external: bool,
+    max_cost_usd: float | None,
+    input_tokens: int,
+) -> tuple[LLMChoice | None, str | None]:
+    cached_provider = str(cached.get("provider") or "")
+    cached_model = str(cached.get("model") or "")
+    choices = _model_choices(settings, task=task, only_free=False)
+    choice = next(
+        (
+            item
+            for item in choices
+            if item.provider.name == cached_provider and item.model == cached_model
+        ),
+        None,
+    )
+    if choice is None:
+        return None, "route_not_currently_configured"
+    if prefer_free and choice.provider.free and not _free_only_eligible_provider(choice.provider):
+        return None, "free_route_not_currently_eligible"
+    if prefer_free and not paid_fallback and not choice.provider.free:
+        return None, "paid_route_not_allowed"
+    if privacy == "local_only" and not allow_external and not _is_trusted_local_choice(choice):
+        return None, "local_only_route_mismatch"
+    if not _choice_matches_provider(choice, provider):
+        return None, "provider_filter_mismatch"
+    if not _choice_matches_model(choice, model):
+        return None, "model_filter_mismatch"
+    if task in ROLE_TASKS and _role_quality_band(choice, task) < _minimum_role_quality_band(quality_target):
+        return None, "quality_floor_mismatch"
+    budget = _budget_status(choice, input_tokens, max_cost_usd)
+    if not budget["eligible"]:
+        return None, f"budget_gate:{budget['reason']}"
+    return choice, None
 
 
 def _append_ledger(settings: Settings, row: dict[str, Any]) -> str:
@@ -3872,6 +3926,8 @@ def run_llm_task(
         avoid_routes=avoid_routes,
         quality_target=quality_target,
         privacy=privacy_mode,
+        allow_external=allow_external,
+        max_cost_usd=max_cost_usd,
         complexity_label=complexity["label"],
         complexity_source=complexity["complexity_source"],
         complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
@@ -3895,6 +3951,43 @@ def run_llm_task(
     if _cache_enabled():
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
+        cached_choice: LLMChoice | None = None
+        if isinstance(cached, dict) and cached.get("content"):
+            cached_choice, policy_error = _cached_choice_policy_status(
+                settings,
+                cached,
+                task=task,
+                prefer_free=prefer_free,
+                paid_fallback=paid_fallback,
+                provider=provider,
+                model=model,
+                quality_target=quality_target,
+                privacy=privacy_mode,
+                allow_external=allow_external,
+                max_cost_usd=max_cost_usd,
+                input_tokens=int(complexity.get("token_estimate") or 0) + 128,
+            )
+            if policy_error:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "cache_policy_rejected",
+                        "task": task,
+                        "provider": cached.get("provider"),
+                        "model": cached.get("model"),
+                        "free": cached.get("free"),
+                        "complexity": complexity,
+                        "cache_debug": cache_debug,
+                        "policy_error": policy_error,
+                        "input_tokens_est": 0,
+                        "output_tokens_est": 0,
+                        "estimated_cost_usd": 0.0,
+                    },
+                )
+                cache.pop(cache_key, None)
+                _save_response_cache(settings, cache)
+                cached = None
         if isinstance(cached, dict) and cached.get("content"):
             output_valid, output_error = _validate_structured_output(str(cached["content"]), required_output_format)
             if not output_valid:
@@ -3928,7 +4021,13 @@ def run_llm_task(
                     "task": task,
                     "provider": cached.get("provider"),
                     "model": cached.get("model"),
-                    "free": cached.get("free"),
+                    "free": cached_choice.provider.free if cached_choice else cached.get("free"),
+                    "billing_class": (
+                        cached_choice.provider.billing_class
+                        if cached_choice
+                        else cached.get("billing_class")
+                    ),
+                    "privacy": privacy_mode,
                     "complexity": complexity,
                     "cache_debug": cache_debug,
                     "input_tokens_est": 0,
@@ -4077,6 +4176,10 @@ def run_llm_task(
                     "provider": choice.provider.name,
                     "model": choice.model,
                     "free": choice.provider.free,
+                    "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+                    "privacy": privacy_mode,
+                    "allow_external": allow_external,
+                    "cache_policy_version": CACHE_POLICY_VERSION,
                     "content": content,
                 }
                 _save_response_cache(settings, cache)
