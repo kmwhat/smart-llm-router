@@ -70,6 +70,7 @@ $HOME/.local/state/smart-llm-router
 - 隐私与预算门：私人图片、聊天记录、身份信息和原始音视频默认 `local_only`；`--max-cost-usd` 下未知价格的付费模型失败关闭。
 - 多模态路由预演：`route-plan` 会先输出任务描述器、本地步骤、免费池、低价付费和 Codex 审计路线，不调用模型。
 - Provider-family 能力注册表：`capabilities` 会区分“供应商 API key 已知可支持的模型态”和“当前已配置、已探活、可执行路由的具体模型”，覆盖文本、视觉/OCR、ASR、图像/视频生成、embedding、rerank、code 等。
+- 本地 Whisper 稳定模式：`SMART_LLM_ASR_WHISPER_CPP_NO_GPU=true` 会为 whisper.cpp 加入官方 `-ng/--no-gpu` 参数；公共默认保持 `false`，只在 GPU/Metal 路径不稳定的主机启用。
 - 转写稿分块纠错：`transcript-correct` 会把长篇 ASR 文本分块修正并落盘，避免编排层加载整份原始转写稿。
 - 免费池优先：优先尝试免费模型，失败自动换下一个。
 - 视觉模型路由：支持本地图片 `--image`，自动转换为 OpenAI-compatible 多模态消息。

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -190,7 +191,7 @@ SYSTEM_PROMPTS = {
     "classify": "你是资料分类助手。优先输出简洁 JSON。",
     "summarize": "你是资料摘要助手。保留术语、出处线索和关键词。",
     "clean": "你是 OCR 文本清洗助手。修正常见错字、断行和页眉页脚，保留原意。",
-    "qa": "你是基于材料的初级问答助手；不确定就说不确定。",
+    "qa": "你是准确简洁的初级问答助手。优先遵守用户明确的输出格式；提供材料时仅依据材料回答，确实无法判断时说不确定。",
     "vision": "你是保守的图像观察助手。只描述图中可见事实，输出结构化 JSON，不做医学诊断、身份识别或确定性预测。",
     "ocr": "你是保守的图像/OCR 观察助手。只提取图中可见文字和版面事实，不补写看不清的内容。",
     "transcript_correct": "你是中文 ASR 转写稿修正助手。只修正口误、同音错字、术语误识别、重复噪声和断句；保持讲者原有顺序、论证链和案例逻辑；不确定处标【待复核】，不要编造。",
@@ -2193,6 +2194,44 @@ def _command_path(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _whisper_cpp_no_gpu_enabled() -> bool:
+    return os.getenv("SMART_LLM_ASR_WHISPER_CPP_NO_GPU", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _whisper_cpp_transcribe_command(
+    command: str,
+    model_path: str | Path,
+    wav_path: Path,
+    language: str,
+    output_stem: Path,
+    *,
+    no_gpu: bool,
+) -> list[str]:
+    args = [command]
+    if no_gpu:
+        args.append("-ng")
+    args.extend(
+        [
+            "-m",
+            str(Path(model_path).expanduser()),
+            "-f",
+            str(wav_path),
+            "-l",
+            language,
+            "-otxt",
+            "-osrt",
+            "-of",
+            str(output_stem),
+        ]
+    )
+    return args
+
+
 def asr_status(settings: Settings | None = None) -> dict[str, Any]:
     model_path = os.getenv("SMART_LLM_ASR_WHISPER_CPP_MODEL", "").strip()
     whisper_cpp_command = _command_path("whisper-cli") or _command_path("whisper-cpp")
@@ -2203,6 +2242,7 @@ def asr_status(settings: Settings | None = None) -> dict[str, Any]:
             "whisper_cpp": {
                 "command": whisper_cpp_command,
                 "model": model_path or None,
+                "no_gpu": _whisper_cpp_no_gpu_enabled(),
                 "ready": bool(whisper_cpp_command and model_path and Path(model_path).expanduser().exists()),
             },
             "openai_whisper": {
@@ -3021,7 +3061,14 @@ def transcribe_media(
         if not command or not model_path:
             raise RuntimeError("whisper.cpp 未就绪：需要 whisper-cli 命令和 SMART_LLM_ASR_WHISPER_CPP_MODEL 模型路径。")
         subprocess.run(
-            [command, "-m", str(Path(model_path).expanduser()), "-f", str(wav_path), "-l", language, "-otxt", "-osrt", "-of", str(out_dir / source.stem)],
+            _whisper_cpp_transcribe_command(
+                command,
+                model_path,
+                wav_path,
+                language,
+                out_dir / source.stem,
+                no_gpu=bool(status["backends"]["whisper_cpp"]["no_gpu"]),
+            ),
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -3109,6 +3156,23 @@ def _estimated_cost_usd(choice: LLMChoice, input_tokens: int, output_tokens: int
     return round((input_tokens * input_price + output_tokens * output_price) / 1_000_000, 8)
 
 
+def _local_ollama_reasoning_effort(choice: LLMChoice) -> str | None:
+    provider = choice.provider
+    parsed = urlparse(provider.base_url)
+    if (
+        provider.billing_class != "local"
+        or "ollama" not in provider.name.lower()
+        or (parsed.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}
+    ):
+        return None
+    value = os.getenv("SMART_LLM_OLLAMA_REASONING_EFFORT", "none").strip().lower()
+    if value in {"", "auto", "default"}:
+        return None
+    if value not in {"none", "low", "medium", "high"}:
+        raise RuntimeError("SMART_LLM_OLLAMA_REASONING_EFFORT 仅支持 none、low、medium、high 或 auto")
+    return value
+
+
 def _call_openai_compatible(choice: LLMChoice, *, messages: list[dict[str, Any]], timeout: float, temperature: float, max_tokens: int | None = None) -> tuple[str, dict[str, Any]]:
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
@@ -3116,6 +3180,9 @@ def _call_openai_compatible(choice: LLMChoice, *, messages: list[dict[str, Any]]
     payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": temperature}
     if max_tokens:
         payload["max_tokens"] = max_tokens
+    reasoning_effort = _local_ollama_reasoning_effort(choice)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     with httpx.Client(timeout=timeout) as client:
         response = client.post(
             choice.provider.base_url.rstrip("/") + "/chat/completions",
