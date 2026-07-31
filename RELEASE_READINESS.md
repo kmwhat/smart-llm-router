@@ -2,11 +2,14 @@
 
 ## 0.7.0 Free-Route and Local-Fallback Candidate — 2026-07-31
 
-Status: local release-candidate preflight complete; protected CI, merge, tag,
-and publication remain pending separate authorization.
+Status: protected PR #15 and post-merge main CI complete; this snapshot is
+eligible for `v0.7.0` tagging and publication after independent artifact
+acceptance.
 
 - Package metadata, runtime version, changelog, and public installation link
   report `0.7.0`.
+- Protected push and pull-request CI passed before squash merge, and the
+  post-merge `main` workflow passed Python 3.10–3.14 plus `package-smoke`.
 - The candidate contains safe NVIDIA discovery, explicit free-route credential
   and health semantics, guarded trial-quota admission, remote-free-first local
   fallback, Ollama compatibility, optional whisper.cpp no-GPU execution, and
