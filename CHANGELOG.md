@@ -4,6 +4,47 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.7.0 - 2026-07-31
+
+### Added
+
+- Added safe NVIDIA free-endpoint discovery that separates general text and
+  code candidates from specialized vision, embedding, rerank, safety, reward,
+  detection, and parsing models while preserving same-provider key rotation.
+- Added credential-status probes that distinguish catalog visibility,
+  authentication evidence, request validation, and real model callability
+  without printing credentials.
+- Added tri-state route health and explicit execution eligibility so unknown,
+  cooled-down, and recently successful routes are not conflated.
+- Added local Ollama compatibility for public fallback models and an optional
+  whisper.cpp no-GPU flag for hosts where the GPU path is unstable.
+
+### Changed
+
+- Kept ordinary non-sensitive work remote-free-first while preserving local
+  models for `local_only` privacy and final zero-cost fallback.
+- Required `trial_quota` routes to have an explicit hard-stop guard before they
+  may enter free-only execution.
+- Revalidated cached responses against the current provider/model inventory,
+  free-only eligibility, privacy, explicit route constraints, role quality
+  floor, and cost budget before returning them.
+- Moved previous cache entries into a versioned legacy namespace instead of
+  clearing unrelated runtime state.
+
+### Fixed
+
+- Prevented historical cached responses from retired or reclassified routes
+  from satisfying current `free-only` or `local_only` requests.
+- Prevented public model catalogs and request-validation responses from being
+  reported as successful credential or endpoint checks.
+- Improved Ollama request/response compatibility and local ASR command
+  construction without changing production role defaults.
+
+### Tests
+
+- Added regression coverage for cache policy, credential semantics, NVIDIA
+  discovery filtering, health admission, Ollama compatibility, and local ASR.
+
 ## 0.6.0 - 2026-07-30
 
 ### Security

@@ -1,5 +1,42 @@
 # Public Release Readiness
 
+## 0.7.0 Free-Route and Local-Fallback Candidate — 2026-07-31
+
+Status: local release-candidate preflight complete; protected CI, merge, tag,
+and publication remain pending separate authorization.
+
+- Package metadata, runtime version, changelog, and public installation link
+  report `0.7.0`.
+- The candidate contains safe NVIDIA discovery, explicit free-route credential
+  and health semantics, guarded trial-quota admission, remote-free-first local
+  fallback, Ollama compatibility, optional whisper.cpp no-GPU execution, and
+  cache-policy revalidation.
+- Cache hits are rechecked against the current route inventory, free/privacy
+  rules, explicit provider/model constraints, role quality floor, and budget;
+  old cache entries remain in a versioned legacy namespace.
+- Production role defaults remain unchanged and task descriptor v2 remains
+  default off.
+- Public quickstart commands remain limited to router configuration,
+  recommendation, route planning, free QA execution, health, and ledger
+  inspection.
+- Local catalogs, private environment files, runtime ledgers, caches, account
+  details, and machine-specific configuration are excluded from public source
+  and distribution artifacts.
+- The source tree and extracted source distribution each passed 139 tests and
+  bytecode compilation; the working tree passed diff-format validation.
+- A clean Python 3.14 environment installed the wheel with dependencies and
+  passed `pip check`, package/runtime version checks, license metadata, CLI
+  help, local scoring, and no-credential provider inspection.
+- Source, Git history, wheel, and source distribution passed Gitleaks. Archive
+  scans found no private absolute paths, credential-catalog filenames, private
+  configuration paths, runtime-state files, or router backup material.
+- A fresh remote `free-only` QA call and an explicit local `local_only` Ollama
+  QA call both returned the required output with a zero-dollar hard budget;
+  the exact ledger window contained zero paid model calls.
+- A timed-out first-choice free endpoint entered cooldown and the production
+  recommendation correctly advanced to the recently successful remote free
+  route while retaining local models as final fallback.
+
 ## 0.6.0 Credential Catalog Hardening Candidate — 2026-07-30
 
 Status: local candidate complete; protected CI and publication authorization remain pending.
