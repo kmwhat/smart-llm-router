@@ -87,6 +87,7 @@ $HOME/.local/state/smart-llm-router
 - 动态模型发现：OpenRouter、NVIDIA、Groq 候选目录默认每 6 小时按需刷新，单家发现失败会保留上次清单；OpenRouter/NVIDIA 同时发现视觉候选。
 - NVIDIA 免费端点按 `trial_quota` 管理：目录可见不等于调用成功或生产许可；通用文本/代码候选与视觉、embedding、rerank、安全、reward、检测、解析等专用模型隔离，实际调用前仍需健康探针。
 - 动态发现的 NVIDIA 候选继承同供应商多 key 轮换；某个 key 对具体模型返回 401/403 时可尝试下一条已配置路线，但不会把鉴权失败冒充为模型故障或免费保证。
+- 标记为免费且 `billing_class=trial_quota` 的路线默认不进入执行池。只有逐个 Provider 核实“当前仍有免费额度”且账户或模型已启用“额度耗尽即停止、不转付费”后，才可在本机私有配置设置 `SMART_LLM<n>_TRIAL_QUOTA_GUARDED=true`；目录标签、key 存在或旧调用成功都不能替代这两项证明。
 - 发现不等于生产晋级：新免费模型可进入通用任务池，规划、执行、审计和复验仍须通过基准测试并登记质量档。
 - 按模态健康检查：`refresh-modalities` 会分别用 text/vision/OCR/transcript/code 小探针验证模型，而不只用通用 QA。
 - 可迁移：`.env` + 本目录即可复制到其他电脑。
@@ -126,6 +127,7 @@ cp .env.example .env
 smart-llm-router --help
 smart-llm-router providers
 smart-llm-router capabilities --configured-only
+smart-llm-router credential-status
 smart-llm-router recommend "Return OK" --task qa --free-only
 smart-llm-router route-plan "Return OK" --task qa --quality-target production
 smart-llm-router task "Return OK" --task qa --free-only
@@ -134,6 +136,14 @@ smart-llm-router status
 smart-llm-router ledger --limit 20
 smart-llm-router route-stats --task qa --limit 1000
 ```
+
+`credential-status` 只检查已配置的 OpenRouter、Qwen、NVIDIA 和 Groq 免费远端凭证，
+不会调用任何模型或付费路线，也不输出 key。它与模型发现、真实调用是三层独立证据：
+公共目录可见不代表凭证有效，凭证被接受也不代表某个模型当前可调用。OpenRouter 和
+NVIDIA 的发现命令只读取公共目录；Groq 发现使用认证目录；所有候选仍须通过
+`refresh` 或 `task` 的真实运行探针。NVIDIA 当前没有被本工具采用的无推理认证接口；
+对空 completion 请求返回的 HTTP 400/422 只证明请求进入校验层，状态记为
+`indeterminate`，不能据此标记 key 已被接受。
 
 正常的 `recommend`、`route-plan` 和 `task` 会在免费模型目录过期时按需发现新候选。可用
 `SMART_LLM_AUTO_DISCOVER_FREE=false` 关闭，或用 `SMART_LLM_DISCOVERY_TTL_HOURS` 调整刷新周期；

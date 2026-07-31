@@ -20,6 +20,7 @@ from .router import (
     TASK_TYPES,
     capability_registry,
     clear_route_state,
+    credential_status,
     describe_providers,
     discover_free_pool,
     discover_groq_models,
@@ -213,21 +214,25 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_modalities.add_argument("--tasks", default="qa,vision,ocr,transcript_correct,code", help="逗号分隔任务，如 qa,vision,ocr,transcript_correct,code")
     refresh_modalities.add_argument("--families", default="", help="只探测指定 provider/model family，逗号分隔，如 zhipu,qwen,deepseek")
 
+    credential_check = sub.add_parser("credential-status", help="只检查免费远端凭证认证状态；不调用模型、不输出 key")
+    credential_check.add_argument("--families", default="openrouter,qwen,nvidia,groq", help="逗号分隔 family，仅支持 openrouter,qwen,nvidia,groq")
+    credential_check.add_argument("--timeout", type=float, default=10.0, help="单个凭证认证探针超时秒数")
+
     discover = sub.add_parser("discover", help="聚合发现 OpenRouter/NVIDIA/Groq 候选模型")
     discover.add_argument("--limit", type=int, default=20)
-    discover_or = sub.add_parser("discover-openrouter", help="发现 OpenRouter :free 模型")
+    discover_or = sub.add_parser("discover-openrouter", help="从 OpenRouter 公共目录发现 :free 候选；不验证凭证")
     discover_or.add_argument("--limit", type=int, default=20)
-    discover_nv = sub.add_parser("discover-nvidia", help="发现 NVIDIA 当前 key 可见模型")
+    discover_nv = sub.add_parser("discover-nvidia", help="从 NVIDIA 公共目录发现候选；不验证凭证")
     discover_nv.add_argument("--limit", type=int, default=50)
-    discover_groq = sub.add_parser("discover-groq", help="发现 Groq 当前 key 可见模型")
+    discover_groq = sub.add_parser("discover-groq", help="通过 Groq 认证目录发现候选；仍需真实调用验证")
     discover_groq.add_argument("--limit", type=int, default=50)
     discover_ark = sub.add_parser("discover-ark", help="发现火山方舟当前 key 可见的模型 ID")
     discover_ark.add_argument("--limit", type=int, default=100)
     discover_vision = sub.add_parser("discover-vision", help="发现免费/试用视觉模型候选")
     discover_vision.add_argument("--limit", type=int, default=20)
-    discover_or_vision = sub.add_parser("discover-openrouter-vision", help="发现 OpenRouter :free 视觉模型候选")
+    discover_or_vision = sub.add_parser("discover-openrouter-vision", help="从 OpenRouter 公共目录发现 :free 视觉候选；不验证凭证")
     discover_or_vision.add_argument("--limit", type=int, default=20)
-    discover_nv_vision = sub.add_parser("discover-nvidia-vision", help="发现 NVIDIA 当前 key 可见视觉模型候选")
+    discover_nv_vision = sub.add_parser("discover-nvidia-vision", help="从 NVIDIA 公共目录发现视觉候选；不验证凭证")
     discover_nv_vision.add_argument("--limit", type=int, default=50)
 
     maintain = sub.add_parser("maintain", help="自动发现免费模型并对整池做健康检查")
@@ -448,6 +453,9 @@ def main() -> None:
         tasks = [item.strip() for item in args.tasks.split(",") if item.strip()]
         families = [item.strip() for item in args.families.split(",") if item.strip()]
         print(json.dumps(refresh_model_pool_by_modality(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit, tasks=tasks, families=families), ensure_ascii=False, indent=2))
+    elif args.command == "credential-status":
+        families = [item.strip() for item in args.families.split(",") if item.strip()]
+        print(json.dumps(credential_status(settings, families=families, timeout=args.timeout), ensure_ascii=False, indent=2))
     elif args.command == "discover":
         print(json.dumps(discover_free_pool(settings, args.limit), ensure_ascii=False, indent=2))
     elif args.command == "discover-openrouter":

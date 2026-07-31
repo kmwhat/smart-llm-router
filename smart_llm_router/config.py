@@ -18,6 +18,7 @@ class LLMProvider:
     free: bool
     priority: int
     billing_class: str = ""
+    trial_quota_guarded: bool = False
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class Settings:
     auto_discover_free: bool = False
     discovery_ttl_hours: float = 6.0
     discovery_limit: int = 20
+    health_ttl_hours: float = 1.0
     credential_catalog: CredentialCatalogSummary | None = None
 
 
@@ -80,6 +82,7 @@ def _read_provider(prefix: str, index: int) -> LLMProvider | None:
             _bool_env(prefix + "FREE", True),
             os.getenv(prefix + "BILLING_CLASS", ""),
         ),
+        trial_quota_guarded=_bool_env(prefix + "TRIAL_QUOTA_GUARDED", False),
     )
 
 
@@ -163,6 +166,7 @@ def _load_providers() -> tuple[LLMProvider, ...]:
                     provider.free,
                     provider.priority,
                     provider.billing_class,
+                    provider.trial_quota_guarded,
                 )
             )
     # Multiple valid keys from the same vendor become independent routes. This
@@ -181,6 +185,7 @@ def _load_providers() -> tuple[LLMProvider, ...]:
                         provider.free,
                         provider.priority + index - 1,
                         provider.billing_class,
+                        provider.trial_quota_guarded,
                     )
                 )
     providers.extend(clones)
@@ -209,6 +214,7 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
     refresh_limit = int(os.getenv("SMART_LLM_EMPTY_POOL_REFRESH_LIMIT", "8") or "8")
     discovery_ttl_hours = float(os.getenv("SMART_LLM_DISCOVERY_TTL_HOURS", "6") or "6")
     discovery_limit = int(os.getenv("SMART_LLM_DISCOVERY_LIMIT", "20") or "20")
+    health_ttl_hours = float(os.getenv("SMART_LLM_HEALTH_TTL_HOURS", "1") or "1")
     return Settings(
         data_dir=data_dir,
         providers=_load_providers(),
@@ -218,5 +224,6 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
         auto_discover_free=_bool_env("SMART_LLM_AUTO_DISCOVER_FREE", True),
         discovery_ttl_hours=max(0.0, discovery_ttl_hours),
         discovery_limit=max(1, discovery_limit),
+        health_ttl_hours=max(0.0, health_ttl_hours),
         credential_catalog=catalog_summary,
     )

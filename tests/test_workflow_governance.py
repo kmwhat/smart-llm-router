@@ -13,7 +13,7 @@ class WorkflowGovernanceTests(unittest.TestCase):
         providers = (
             LLMProvider("qwen-frontier-paid", "https://qwen.test/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid"),
             LLMProvider("zhipu-glm-lowcost", "https://glm.test/v1", "GLM_KEY", ("glm-5.2",), False, 2, "paid"),
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 3, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 3, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 4, "paid"),
             LLMProvider("kimi-frontier-paid", "https://kimi.test/v1", "KIMI_KEY", ("kimi-k3",), False, 5, "paid"),
         )

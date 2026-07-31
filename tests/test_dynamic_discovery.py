@@ -7,8 +7,10 @@ from unittest.mock import patch
 
 from smart_llm_router.config import LLMProvider, Settings
 from smart_llm_router.router import (
+    _load_route_state,
     _model_choices,
     _record_discovered_free_models,
+    _record_success,
     discover_nvidia_models,
     run_llm_task,
 )
@@ -45,6 +47,7 @@ class DynamicDiscoveryTests(unittest.TestCase):
                     True,
                     2,
                     "trial_quota",
+                    True,
                 ),
             ),
             timeout=5,
@@ -73,7 +76,7 @@ class DynamicDiscoveryTests(unittest.TestCase):
         self.assertEqual([row["id"] for row in families["openrouter"]], ["new/openrouter:free"])
         self.assertEqual([row["id"] for row in families["groq"]], ["old-groq"])
 
-    def test_stale_snapshot_is_discovered_and_new_model_can_execute(self) -> None:
+    def test_stale_snapshot_discovery_requires_successful_probe_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._settings(Path(tmp))
 
@@ -96,6 +99,26 @@ class DynamicDiscoveryTests(unittest.TestCase):
             ):
                 with patch("smart_llm_router.router.discover_free_pool", side_effect=discover) as discovery:
                     with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})):
+                        with self.assertRaisesRegex(RuntimeError, "没有匹配"):
+                            run_llm_task(
+                                settings,
+                                task="qa",
+                                prompt="只输出 OK",
+                                provider="openrouter",
+                                model="new/model:free",
+                                paid_fallback=False,
+                                privacy="external_allowed",
+                            )
+                        discovered_choice = next(
+                            choice
+                            for choice in _model_choices(settings, task="qa", only_free=True)
+                            if choice.model == "new/model:free"
+                        )
+                        _record_success(
+                            settings,
+                            discovered_choice,
+                            _load_route_state(settings),
+                        )
                         result = run_llm_task(
                             settings,
                             task="qa",
@@ -179,6 +202,7 @@ class DynamicDiscoveryTests(unittest.TestCase):
                         True,
                         1,
                         "trial_quota",
+                        True,
                     ),
                     LLMProvider(
                         "nvidia-free-key2",
@@ -188,6 +212,7 @@ class DynamicDiscoveryTests(unittest.TestCase):
                         True,
                         2,
                         "trial_quota",
+                        True,
                     ),
                 ),
                 timeout=5,

@@ -28,6 +28,7 @@ class RoleRoutingTests(unittest.TestCase):
             True,
             1,
             "trial_quota",
+            True,
         )
         rotated_provider = LLMProvider(
             "nvidia-google-free-key2",
@@ -37,6 +38,7 @@ class RoleRoutingTests(unittest.TestCase):
             True,
             2,
             "trial_quota",
+            True,
         )
         settings = self._settings((provider, rotated_provider))
         adapters = settings.data_dir / "adapter-lifecycle" / "adapters"
@@ -60,7 +62,7 @@ class RoleRoutingTests(unittest.TestCase):
         providers = (
             LLMProvider("qwen-frontier-paid", "https://dashscope.test/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid"),
             LLMProvider("zhipu-glm-lowcost", "https://zhipu.test/v1", "GLM_KEY", ("glm-5.2",), False, 2, "paid"),
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 3, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 3, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 4, "paid"),
             LLMProvider("kimi-frontier-paid", "https://kimi.test/v1", "KIMI_KEY", ("kimi-k3",), False, 5, "paid"),
         )
@@ -89,7 +91,7 @@ class RoleRoutingTests(unittest.TestCase):
 
     def test_role_execution_uses_one_free_model_when_quality_band_is_equal(self) -> None:
         providers = (
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 2, "paid"),
         )
         with patch.dict(os.environ, {"GEMINI_KEY": "test", "DEEPSEEK_KEY": "test", "SMART_LLM_CACHE": "false"}, clear=True):
@@ -106,7 +108,7 @@ class RoleRoutingTests(unittest.TestCase):
 
     def test_stronger_role_band_beats_lower_band_free_model(self) -> None:
         providers = (
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True),
             LLMProvider("qwen-frontier-paid", "https://qwen.test/v1", "QWEN_KEY", ("qwen3.7-max",), False, 2, "paid"),
         )
         with patch.dict(os.environ, {"GEMINI_KEY": "test", "QWEN_KEY": "test"}, clear=True):
@@ -129,6 +131,7 @@ class RoleRoutingTests(unittest.TestCase):
             True,
             1,
             "trial_quota",
+            True,
         )
         with patch.dict(os.environ, {"GROQ_KEY": "test"}, clear=True):
             result = recommend_route(
@@ -144,7 +147,7 @@ class RoleRoutingTests(unittest.TestCase):
 
     def test_quality_floor_is_shared_by_recommend_plan_and_direct_run(self) -> None:
         providers = (
-            LLMProvider("groq-free", "https://groq.test/v1", "GROQ_KEY", ("openai/gpt-oss-120b",), True, 1, "trial_quota"),
+            LLMProvider("groq-free", "https://groq.test/v1", "GROQ_KEY", ("openai/gpt-oss-120b",), True, 1, "trial_quota", True),
             LLMProvider("unregistered-free", "https://free.test/v1", "FREE_KEY", ("unregistered-chat",), True, 2, "permanent_free"),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 3, "paid"),
         )
@@ -182,11 +185,11 @@ class RoleRoutingTests(unittest.TestCase):
 
     def test_production_excludes_band_two_but_can_use_free_sufficient_band_three(self) -> None:
         verify_providers = (
-            LLMProvider("groq-free", "https://groq.test/v1", "GROQ_KEY", ("openai/gpt-oss-120b",), True, 1, "trial_quota"),
+            LLMProvider("groq-free", "https://groq.test/v1", "GROQ_KEY", ("openai/gpt-oss-120b",), True, 1, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 2, "paid"),
         )
         execute_providers = (
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True),
             LLMProvider("zhipu-glm-lowcost", "https://glm.test/v1", "GLM_KEY", ("glm-5.2",), False, 2, "paid"),
         )
         env = {"GROQ_KEY": "test", "DEEPSEEK_KEY": "test", "GEMINI_KEY": "test", "GLM_KEY": "test"}
@@ -211,7 +214,7 @@ class RoleRoutingTests(unittest.TestCase):
         self.assertEqual(execute["recommended_order"][0]["role_quality_band"], 3)
 
     def test_frontier_role_fails_closed_without_band_four(self) -> None:
-        provider = LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota")
+        provider = LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True)
         settings = self._settings((provider,))
         with patch.dict(os.environ, {"GEMINI_KEY": "test", "SMART_LLM_CACHE": "false"}, clear=True):
             recommendation = recommend_route(
@@ -257,6 +260,50 @@ class RoleRoutingTests(unittest.TestCase):
                         task="vision",
                         prompt="分析这张私人照片",
                         prefer_free=False,
+                    )
+        call.assert_not_called()
+
+    def test_local_only_allows_free_loopback_provider(self) -> None:
+        provider = LLMProvider(
+            "ollama-local",
+            "http://127.0.0.1:11434/v1",
+            "OLLAMA_KEY",
+            ("hermes3:latest",),
+            True,
+            1,
+            "local",
+        )
+        with patch.dict(os.environ, {"OLLAMA_KEY": "local", "SMART_LLM_CACHE": "false"}, clear=True):
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})) as call:
+                result = run_llm_task(
+                    self._settings((provider,)),
+                    task="qa",
+                    prompt="只输出 OK",
+                    privacy="local_only",
+                    paid_fallback=False,
+                )
+        self.assertEqual(result.provider, "ollama-local")
+        self.assertEqual(call.call_count, 1)
+
+    def test_local_only_rejects_remote_provider_with_local_label(self) -> None:
+        provider = LLMProvider(
+            "fake-local",
+            "https://remote.test/v1",
+            "FAKE_KEY",
+            ("fake-model",),
+            True,
+            1,
+            "local",
+        )
+        with patch.dict(os.environ, {"FAKE_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router._call_openai_compatible") as call:
+                with self.assertRaisesRegex(RuntimeError, "local_only"):
+                    run_llm_task(
+                        self._settings((provider,)),
+                        task="qa",
+                        prompt="只输出 OK",
+                        privacy="local_only",
+                        paid_fallback=False,
                     )
         call.assert_not_called()
 
@@ -372,6 +419,7 @@ class RoleRoutingTests(unittest.TestCase):
                 True,
                 2,
                 "trial_quota",
+                True,
             ),
         )
         with patch.dict(os.environ, {"ARK_KEY": "test", "GEMINI_KEY": "test"}, clear=True):
