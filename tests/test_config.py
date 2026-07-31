@@ -46,6 +46,7 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(settings.auto_discover_free)
             self.assertEqual(settings.discovery_ttl_hours, 6.0)
             self.assertEqual(settings.discovery_limit, 20)
+            self.assertEqual(settings.health_ttl_hours, 1.0)
 
     def test_paid_keys_register_supported_provider_modes_and_free_gemini(self) -> None:
         with patch.dict(
@@ -116,6 +117,40 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings()
         provider = next(item for item in settings.providers if item.name == "groq-free")
         self.assertEqual(provider.billing_class, "trial_quota")
+        self.assertFalse(provider.trial_quota_guarded)
+
+    def test_trial_quota_guard_requires_explicit_provider_opt_in(self) -> None:
+        base = {
+            "DASHSCOPE_API_KEY": "test",
+            "SMART_LLM1_NAME": "qwen-free",
+            "SMART_LLM1_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "SMART_LLM1_API_KEY_ENV": "DASHSCOPE_API_KEY",
+            "SMART_LLM1_MODELS": "qwen-plus-latest",
+            "SMART_LLM1_FREE": "true",
+            "SMART_LLM1_BILLING_CLASS": "trial_quota",
+        }
+        with patch.dict(os.environ, base, clear=True):
+            unguarded = load_settings()
+        provider = next(item for item in unguarded.providers if item.name == "qwen-free")
+        self.assertFalse(provider.trial_quota_guarded)
+
+        with patch.dict(
+            os.environ,
+            {
+                **base,
+                "DASHSCOPE_API_KEY_2": "test-2",
+                "SMART_LLM1_TRIAL_QUOTA_GUARDED": "true",
+            },
+            clear=True,
+        ):
+            guarded = load_settings()
+        guarded_routes = [
+            item
+            for item in guarded.providers
+            if item.name in {"qwen-free", "qwen-free-key2"}
+        ]
+        self.assertEqual(len(guarded_routes), 2)
+        self.assertTrue(all(item.trial_quota_guarded for item in guarded_routes))
 
     def test_private_legacy_namespace_is_not_loaded_by_public_core(self) -> None:
         legacy_prefix = "FENG" + "SHUI"

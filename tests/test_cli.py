@@ -37,6 +37,12 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.task, "audit")
         self.assertEqual(args.limit, 250)
 
+    def test_credential_status_defaults_to_free_remote_families(self) -> None:
+        args = build_parser().parse_args(["credential-status", "--timeout", "3"])
+        self.assertEqual(args.command, "credential-status")
+        self.assertEqual(args.families, "openrouter,qwen,nvidia,groq")
+        self.assertEqual(args.timeout, 3)
+
     def test_transcript_correction_defaults_to_general_domain(self) -> None:
         args = build_parser().parse_args(["transcript-correct", "transcript.txt"])
         self.assertEqual(args.domain, "general")

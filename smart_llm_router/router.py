@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -190,7 +191,7 @@ SYSTEM_PROMPTS = {
     "classify": "你是资料分类助手。优先输出简洁 JSON。",
     "summarize": "你是资料摘要助手。保留术语、出处线索和关键词。",
     "clean": "你是 OCR 文本清洗助手。修正常见错字、断行和页眉页脚，保留原意。",
-    "qa": "你是基于材料的初级问答助手；不确定就说不确定。",
+    "qa": "你是准确简洁的初级问答助手。优先遵守用户明确的输出格式；提供材料时仅依据材料回答，确实无法判断时说不确定。",
     "vision": "你是保守的图像观察助手。只描述图中可见事实，输出结构化 JSON，不做医学诊断、身份识别或确定性预测。",
     "ocr": "你是保守的图像/OCR 观察助手。只提取图中可见文字和版面事实，不补写看不清的内容。",
     "transcript_correct": "你是中文 ASR 转写稿修正助手。只修正口误、同音错字、术语误识别、重复噪声和断句；保持讲者原有顺序、论证链和案例逻辑；不确定处标【待复核】，不要编造。",
@@ -449,6 +450,12 @@ class RouteState:
     reason: str | None
 
 
+@dataclass(frozen=True)
+class RouteHealthEvidence:
+    last_success_at: datetime | None
+    last_failure_at: datetime | None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -459,6 +466,10 @@ def _choice_key(choice: LLMChoice) -> str:
 
 def _state_path(settings: Settings) -> Path:
     return settings.data_dir / "llm_router_state.json"
+
+
+def _health_evidence_path(settings: Settings) -> Path:
+    return settings.data_dir / "llm_route_health.json"
 
 
 def _refresh_report_path(settings: Settings) -> Path:
@@ -553,6 +564,29 @@ def _template_provider_for_family(settings: Settings, family: str, source: str =
             if not any(term in provider.name.lower() for term in specialist_terms)
         ]
     return sorted(matching or free_candidates, key=lambda provider: (provider.priority, provider.name))[0]
+
+
+def _template_providers_for_discovered_family(
+    settings: Settings,
+    family: str,
+    source: str = "",
+) -> list[LLMProvider]:
+    """Return the selected discovery template and its credential rotations."""
+    template = _template_provider_for_family(settings, family, source)
+    if not template:
+        return []
+    base_name = re.sub(r"-key\d+$", "", template.name.lower())
+    return sorted(
+        [
+            provider
+            for provider in settings.providers
+            if provider.free
+            and re.sub(r"-key\d+$", "", provider.name.lower()) == base_name
+            and provider.base_url == template.base_url
+            and os.getenv(provider.api_key_env, "").strip()
+        ],
+        key=lambda provider: (provider.priority, provider.name),
+    )
 
 
 def _load_discovered_free_models(settings: Settings) -> dict[str, list[dict[str, Any]]]:
@@ -674,23 +708,55 @@ def _load_json(path: Path) -> Any:
         return None
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _load_route_state(settings: Settings) -> dict[str, RouteState]:
     raw = _load_json(_state_path(settings)) or {}
     states: dict[str, RouteState] = {}
     for key, value in raw.items():
-        until = value.get("unavailable_until")
-        parsed_until = None
-        if isinstance(until, str) and until:
-            try:
-                parsed_until = datetime.fromisoformat(until)
-            except ValueError:
-                parsed_until = None
         states[key] = RouteState(
-            unavailable_until=parsed_until,
+            unavailable_until=_parse_timestamp(value.get("unavailable_until")),
             failure_count=int(value.get("failure_count") or 0),
             reason=str(value.get("reason") or "") or None,
         )
     return states
+
+
+def _load_route_health(settings: Settings) -> dict[str, RouteHealthEvidence]:
+    raw = _load_json(_health_evidence_path(settings)) or {}
+    evidence: dict[str, RouteHealthEvidence] = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        evidence[key] = RouteHealthEvidence(
+            last_success_at=_parse_timestamp(value.get("last_success_at")),
+            last_failure_at=_parse_timestamp(value.get("last_failure_at")),
+        )
+    return evidence
+
+
+def _save_route_health(settings: Settings, evidence: dict[str, RouteHealthEvidence]) -> None:
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        key: {
+            "last_success_at": item.last_success_at.isoformat() if item.last_success_at else None,
+            "last_failure_at": item.last_failure_at.isoformat() if item.last_failure_at else None,
+        }
+        for key, item in evidence.items()
+        if item.last_success_at or item.last_failure_at
+    }
+    _health_evidence_path(settings).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _save_route_state(settings: Settings, states: dict[str, RouteState]) -> None:
@@ -763,8 +829,98 @@ def _is_available(choice: LLMChoice, states: dict[str, RouteState]) -> bool:
     return not state or not state.unavailable_until or state.unavailable_until <= _now()
 
 
+def _route_health_snapshot(
+    settings: Settings,
+    choice: LLMChoice,
+    states: dict[str, RouteState],
+    evidence: dict[str, RouteHealthEvidence],
+) -> dict[str, Any]:
+    now = _now()
+    state = states.get(_choice_key(choice))
+    observed = evidence.get(_choice_key(choice))
+    routing_eligible = not state or not state.unavailable_until or state.unavailable_until <= now
+    last_success_at = observed.last_success_at if observed else None
+    last_failure_at = observed.last_failure_at if observed else None
+    success_is_latest = bool(
+        last_success_at
+        and (not last_failure_at or last_success_at > last_failure_at)
+    )
+    success_is_fresh = bool(
+        success_is_latest
+        and last_success_at
+        and now - last_success_at <= timedelta(hours=settings.health_ttl_hours)
+    )
+    if not routing_eligible:
+        health_status = "unhealthy"
+        health_evidence = "active_cooldown"
+    elif success_is_fresh:
+        health_status = "healthy"
+        health_evidence = "recent_success"
+    elif last_failure_at and (not last_success_at or last_failure_at >= last_success_at):
+        health_status = "unknown"
+        health_evidence = "failed_since_last_success"
+    else:
+        health_status = "unknown"
+        health_evidence = "no_recent_success"
+    checked_at = max(
+        (value for value in (last_success_at, last_failure_at) if value),
+        default=None,
+    )
+    return {
+        "health_status": health_status,
+        "health_evidence": health_evidence,
+        "health_checked_at": checked_at.isoformat() if checked_at else None,
+        "last_success_at": last_success_at.isoformat() if last_success_at else None,
+        "routing_eligible": routing_eligible,
+        "available_now": health_status == "healthy",
+    }
+
+
+def _is_declared_choice(settings: Settings, choice: LLMChoice) -> bool:
+    return any(
+        provider.name == choice.provider.name and choice.model in provider.models
+        for provider in settings.providers
+    )
+
+
+def _free_only_eligible_provider(provider: LLMProvider) -> bool:
+    if not provider.free:
+        return False
+    return provider.billing_class != "trial_quota" or provider.trial_quota_guarded
+
+
+def _provider_execution_enabled(provider: LLMProvider) -> bool:
+    return not (
+        provider.free
+        and provider.billing_class == "trial_quota"
+        and not provider.trial_quota_guarded
+    )
+
+
+def _is_execution_eligible_choice(
+    settings: Settings,
+    choice: LLMChoice,
+    states: dict[str, RouteState],
+    evidence: dict[str, RouteHealthEvidence],
+) -> bool:
+    if not _provider_execution_enabled(choice.provider):
+        return False
+    if not _is_available(choice, states):
+        return False
+    if _is_declared_choice(settings, choice):
+        return True
+    return _route_health_snapshot(settings, choice, states, evidence)["health_status"] == "healthy"
+
+
 def _record_success(settings: Settings, choice: LLMChoice, states: dict[str, RouteState]) -> None:
     key = _choice_key(choice)
+    evidence = _load_route_health(settings)
+    previous = evidence.get(key)
+    evidence[key] = RouteHealthEvidence(
+        last_success_at=_now(),
+        last_failure_at=previous.last_failure_at if previous else None,
+    )
+    _save_route_health(settings, evidence)
     if key in states:
         states.pop(key, None)
         _save_route_state(settings, states)
@@ -774,18 +930,26 @@ def _record_failure(settings: Settings, choice: LLMChoice, states: dict[str, Rou
     key = _choice_key(choice)
     previous = states.get(key)
     failure_count = (previous.failure_count if previous else 0) + 1
+    observed_at = _now()
     states[key] = RouteState(
-        unavailable_until=_now() + _cooldown_for_error(exc, failure_count),
+        unavailable_until=observed_at + _cooldown_for_error(exc, failure_count),
         failure_count=failure_count,
         reason=str(exc).replace("\n", " ")[:240],
     )
     _save_route_state(settings, states)
+    evidence = _load_route_health(settings)
+    previous_evidence = evidence.get(key)
+    evidence[key] = RouteHealthEvidence(
+        last_success_at=previous_evidence.last_success_at if previous_evidence else None,
+        last_failure_at=observed_at,
+    )
+    _save_route_health(settings, evidence)
 
 
 def configured_models(settings: Settings, *, only_free: bool = False) -> list[LLMChoice]:
     choices: list[LLMChoice] = []
     for provider in settings.providers:
-        if only_free and not provider.free:
+        if only_free and not _free_only_eligible_provider(provider):
             continue
         if not os.getenv(provider.api_key_env, "").strip():
             continue
@@ -797,30 +961,38 @@ def configured_models(settings: Settings, *, only_free: bool = False) -> list[LL
         existing = {(choice.provider.name, choice.model) for choice in choices}
         for family, items in discovered.items():
             for item in items:
-                template = _template_provider_for_family(settings, family, str(item.get("source") or ""))
-                if not template:
+                templates = _template_providers_for_discovered_family(
+                    settings,
+                    family,
+                    str(item.get("source") or ""),
+                )
+                if not templates:
                     continue
                 model = str(item.get("id") or "").strip()
                 if not model:
                     continue
-                key = (template.name, model)
-                if key in existing:
-                    continue
-                choices.append(
-                    LLMChoice(
-                        provider=LLMProvider(
-                            name=template.name,
-                            base_url=template.base_url,
-                            api_key_env=template.api_key_env,
-                        models=(model,),
-                        free=True,
-                        priority=template.priority,
-                        billing_class=template.billing_class,
-                    ),
-                    model=model,
-                )
-                )
-                existing.add(key)
+                for template in templates:
+                    if only_free and not _free_only_eligible_provider(template):
+                        continue
+                    key = (template.name, model)
+                    if key in existing:
+                        continue
+                    choices.append(
+                        LLMChoice(
+                            provider=LLMProvider(
+                                name=template.name,
+                                base_url=template.base_url,
+                                api_key_env=template.api_key_env,
+                                models=(model,),
+                                free=True,
+                                priority=template.priority,
+                                billing_class=template.billing_class,
+                                trial_quota_guarded=template.trial_quota_guarded,
+                            ),
+                            model=model,
+                        )
+                    )
+                    existing.add(key)
     return choices
 
 
@@ -1038,6 +1210,9 @@ def describe_choice_capability(choice: LLMChoice) -> dict[str, Any]:
         "model_mode": _choice_model_mode(choice),
         "free": choice.provider.free,
         "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+        "trial_quota_guarded": choice.provider.trial_quota_guarded,
+        "free_only_eligible": _free_only_eligible_provider(choice.provider),
+        "execution_enabled": _provider_execution_enabled(choice.provider),
         "priority": choice.provider.priority,
         "input_modalities": modalities["input"],
         "output_modalities": modalities["output"],
@@ -1075,7 +1250,8 @@ def _model_choices(settings: Settings, *, task: str, only_free: bool) -> list[LL
     choices = [
         choice
         for choice in configured_models(settings, only_free=only_free)
-        if _adapter_lifecycle_route_allowed(settings, choice)
+        if _provider_execution_enabled(choice.provider)
+        and _adapter_lifecycle_route_allowed(settings, choice)
     ]
     if task in VISION_TASKS:
         choices = [choice for choice in choices if _is_vision_choice(choice)]
@@ -1122,6 +1298,16 @@ def _choice_matches_model(choice: LLMChoice, model_filter: str | None) -> bool:
         return True
     model = choice.model.lower()
     return needle == model or needle in model
+
+
+def _is_trusted_local_choice(choice: LLMChoice) -> bool:
+    if not choice.provider.free or choice.provider.billing_class != "local":
+        return False
+    try:
+        host = httpx.URL(choice.provider.base_url).host
+    except (TypeError, httpx.InvalidURL):
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
 
 
 def _filter_choices(
@@ -1221,7 +1407,11 @@ def _role_policy_choices(
     choices = [
         choice
         for choice in _model_choices(settings, task=role, only_free=False)
-        if _role_quality_band(choice, role) >= minimum_band and (choice.provider.free or paid_allowed)
+        if _role_quality_band(choice, role) >= minimum_band
+        and (
+            _free_only_eligible_provider(choice.provider)
+            or (paid_allowed and not choice.provider.free)
+        )
     ]
 
     history = history if history is not None else _route_history_map(settings, task=role)
@@ -1261,6 +1451,9 @@ def describe_providers(settings: Settings) -> list[dict[str, Any]]:
             "models": list(provider.models),
             "free": provider.free,
             "billing_class": provider.billing_class or ("permanent_free" if provider.free else "paid"),
+            "trial_quota_guarded": provider.trial_quota_guarded,
+            "free_only_eligible": _free_only_eligible_provider(provider),
+            "execution_enabled": _provider_execution_enabled(provider),
             "priority": provider.priority,
             "provider_family": _provider_family(provider),
         }
@@ -1338,17 +1531,20 @@ def capability_registry(settings: Settings, *, configured_only: bool = False) ->
 
 def route_status(settings: Settings) -> list[dict[str, Any]]:
     states = _load_route_state(settings)
-    now = _now()
+    evidence = _load_route_health(settings)
     rows = []
     for choice in _rank_choices(configured_models(settings, only_free=False), "qa"):
         state = states.get(_choice_key(choice))
         unavailable_until = state.unavailable_until if state else None
+        health = _route_health_snapshot(settings, choice, states, evidence)
         rows.append(
             {
                 "provider": choice.provider.name,
                 "model": choice.model,
                 "free": choice.provider.free,
-                "available_now": not unavailable_until or unavailable_until <= now,
+                **health,
+                "catalog_declared": _is_declared_choice(settings, choice),
+                "execution_eligible": _is_execution_eligible_choice(settings, choice, states, evidence),
                 "unavailable_until": unavailable_until.isoformat() if unavailable_until else None,
                 "failure_count": state.failure_count if state else 0,
                 "reason": state.reason if state else None,
@@ -1749,6 +1945,9 @@ def _cache_enabled() -> bool:
     return os.getenv("SMART_LLM_CACHE", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+CACHE_POLICY_VERSION = "cache-policy-v2"
+
+
 def _cache_key(
     *,
     task: str,
@@ -1763,11 +1962,14 @@ def _cache_key(
     avoid_routes: list[str] | tuple[str, ...] | None = None,
     quality_target: str = "production",
     privacy: str = "external_allowed",
+    allow_external: bool = False,
+    max_cost_usd: float | None = None,
     complexity_label: str = "",
     complexity_source: str = "legacy",
     complexity_version: str = "",
 ) -> str:
     payload = {
+        "cache_policy_version": CACHE_POLICY_VERSION,
         "task": task,
         "prompt": prompt,
         "context": context or "",
@@ -1780,6 +1982,8 @@ def _cache_key(
         "avoid_routes": sorted(_avoid_route_set(avoid_routes)),
         "quality_target": quality_target,
         "privacy": privacy,
+        "allow_external": allow_external,
+        "max_cost_usd": max_cost_usd,
         "complexity_label": complexity_label,
         "complexity_source": complexity_source,
         "complexity_version": complexity_version,
@@ -1824,6 +2028,52 @@ def _save_response_cache(settings: Settings, cache: dict[str, Any]) -> None:
     _cache_path(settings).write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _cached_choice_policy_status(
+    settings: Settings,
+    cached: dict[str, Any],
+    *,
+    task: str,
+    prefer_free: bool,
+    paid_fallback: bool,
+    provider: str | None,
+    model: str | None,
+    quality_target: str,
+    privacy: str,
+    allow_external: bool,
+    max_cost_usd: float | None,
+    input_tokens: int,
+) -> tuple[LLMChoice | None, str | None]:
+    cached_provider = str(cached.get("provider") or "")
+    cached_model = str(cached.get("model") or "")
+    choices = _model_choices(settings, task=task, only_free=False)
+    choice = next(
+        (
+            item
+            for item in choices
+            if item.provider.name == cached_provider and item.model == cached_model
+        ),
+        None,
+    )
+    if choice is None:
+        return None, "route_not_currently_configured"
+    if prefer_free and choice.provider.free and not _free_only_eligible_provider(choice.provider):
+        return None, "free_route_not_currently_eligible"
+    if prefer_free and not paid_fallback and not choice.provider.free:
+        return None, "paid_route_not_allowed"
+    if privacy == "local_only" and not allow_external and not _is_trusted_local_choice(choice):
+        return None, "local_only_route_mismatch"
+    if not _choice_matches_provider(choice, provider):
+        return None, "provider_filter_mismatch"
+    if not _choice_matches_model(choice, model):
+        return None, "model_filter_mismatch"
+    if task in ROLE_TASKS and _role_quality_band(choice, task) < _minimum_role_quality_band(quality_target):
+        return None, "quality_floor_mismatch"
+    budget = _budget_status(choice, input_tokens, max_cost_usd)
+    if not budget["eligible"]:
+        return None, f"budget_gate:{budget['reason']}"
+    return choice, None
+
+
 def _append_ledger(settings: Settings, row: dict[str, Any]) -> str:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     ledger_id = sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
@@ -1852,6 +2102,8 @@ INFRASTRUCTURE_FAILURE_TERMS = (
     "name or service not known",
     "network is unreachable",
     "no route to host",
+    "connection refused",
+    "connection reset by peer",
     "nodename nor servname provided",
     "temporary failure in name resolution",
 )
@@ -1863,8 +2115,10 @@ def classify_route_failure(error: str) -> str:
         return "infrastructure"
     if any(term in text for term in ("429", "rate limit", "rate_limit", "too many requests", "quota", "resource_exhausted")):
         return "quota"
-    if any(term in text for term in ("401", "403", "unauthorized", "forbidden", "authentication", "invalid api key")):
+    if any(term in text for term in ("401", "unauthorized", "authentication", "invalid api key")):
         return "authentication"
+    if "403" in text or "forbidden" in text:
+        return "permission_denied"
     if any(term in text for term in ("404", "410", "model not found", "does not exist", "unsupported model")):
         return "unavailable_model"
     if "timeout" in text or "timed out" in text:
@@ -1994,6 +2248,44 @@ def _command_path(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _whisper_cpp_no_gpu_enabled() -> bool:
+    return os.getenv("SMART_LLM_ASR_WHISPER_CPP_NO_GPU", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _whisper_cpp_transcribe_command(
+    command: str,
+    model_path: str | Path,
+    wav_path: Path,
+    language: str,
+    output_stem: Path,
+    *,
+    no_gpu: bool,
+) -> list[str]:
+    args = [command]
+    if no_gpu:
+        args.append("-ng")
+    args.extend(
+        [
+            "-m",
+            str(Path(model_path).expanduser()),
+            "-f",
+            str(wav_path),
+            "-l",
+            language,
+            "-otxt",
+            "-osrt",
+            "-of",
+            str(output_stem),
+        ]
+    )
+    return args
+
+
 def asr_status(settings: Settings | None = None) -> dict[str, Any]:
     model_path = os.getenv("SMART_LLM_ASR_WHISPER_CPP_MODEL", "").strip()
     whisper_cpp_command = _command_path("whisper-cli") or _command_path("whisper-cpp")
@@ -2004,6 +2296,7 @@ def asr_status(settings: Settings | None = None) -> dict[str, Any]:
             "whisper_cpp": {
                 "command": whisper_cpp_command,
                 "model": model_path or None,
+                "no_gpu": _whisper_cpp_no_gpu_enabled(),
                 "ready": bool(whisper_cpp_command and model_path and Path(model_path).expanduser().exists()),
             },
             "openai_whisper": {
@@ -2067,13 +2360,18 @@ def recommend_route(
     _maybe_auto_discover_free_pool(settings)
     complexity = score_task_complexity(task, prompt, context)
     states = _load_route_state(settings)
+    evidence = _load_route_health(settings)
     route_history = _route_history_map(settings, task=task)
     input_tokens = complexity["token_estimate"] + 128
-    free = [choice for choice in _model_choices(settings, task=task, only_free=True) if _is_available(choice, states)]
+    free = [
+        choice
+        for choice in _model_choices(settings, task=task, only_free=True)
+        if _is_execution_eligible_choice(settings, choice, states, evidence)
+    ]
     paid = [
         choice
         for choice in (_paid_fallback_choices(settings, task, quality_target) if paid_fallback else [])
-        if _is_available(choice, states)
+        if _is_execution_eligible_choice(settings, choice, states, evidence)
     ]
     if complexity["label"] == "simple" and prefer_free and task not in VISION_TASKS and task not in ROLE_TASKS and task != "transcript_correct":
         paid = []
@@ -2090,7 +2388,7 @@ def recommend_route(
                 paid_allowed=paid_fallback,
                 history=route_history,
             )
-            if _is_available(choice, states)
+            if _is_execution_eligible_choice(settings, choice, states, evidence)
         ]
         ordered = role_ordered
         prefer_free = bool(ordered and ordered[0].provider.free)
@@ -2111,6 +2409,11 @@ def recommend_route(
             "infrastructure_failures_excluded_from_health": True,
             "role_tasks_force_paid": False,
             "failed_models_enter_cooldown": True,
+            "health_status_values": ["healthy", "unhealthy", "unknown"],
+            "catalog_visibility_is_not_health": True,
+            "unknown_declared_routes_remain_probe_eligible": True,
+            "unknown_discovered_routes_require_refresh_success": True,
+            "health_ttl_hours": settings.health_ttl_hours,
             "cache_enabled": _cache_enabled(),
         },
         "recommended_order": [
@@ -2119,7 +2422,9 @@ def recommend_route(
                 "model": choice.model,
                 "free": choice.provider.free,
                 "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
-                "available_now": _is_available(choice, states),
+                **_route_health_snapshot(settings, choice, states, evidence),
+                "catalog_declared": _is_declared_choice(settings, choice),
+                "execution_eligible": _is_execution_eligible_choice(settings, choice, states, evidence),
                 "budget": _budget_status(choice, input_tokens, max_cost_usd),
                 "role_fit": [role for role, models in ROLE_MODEL_ORDER.items() if choice.model.lower() in models],
                 "role_quality_band": _role_quality_band(choice, task) if task in ROLE_TASKS else None,
@@ -2517,7 +2822,10 @@ def _build_multimodal_route(
     choices = [
         choice
         for choice in _dedupe_model_routes(configured_models(settings, only_free=False))
-        if (choice.provider.free or paid_allowed)
+        if (
+            _free_only_eligible_provider(choice.provider)
+            or (paid_allowed and not choice.provider.free)
+        )
         and _is_vision_choice(choice)
         and _is_available(choice, states)
         and choice.model in order
@@ -2570,7 +2878,7 @@ def _build_multimodal_route(
             "speech_audio": ["doubao-realtime-voice", "doubao-streaming-asr", "doubao-recording-asr-2.0"],
             "embedding": ["doubao-embedding-vision"],
         },
-        "selection_rule": "only healthy and budget-eligible chat-compatible models execute; media generation, speech, and embedding need dedicated adapters and probes",
+        "selection_rule": "chat-compatible models outside active cooldown may be probed; only recent successful calls are reported healthy, while media generation, speech, and embedding need dedicated adapters and probes",
     }
 
 
@@ -2662,6 +2970,7 @@ def route_plan(
     ordered: list[dict[str, Any]] = []
     paid_preview: list[dict[str, Any]] = []
     states = _load_route_state(settings)
+    evidence = _load_route_health(settings)
     raw_order = recommendation.get("recommended_order") or []
     for item in raw_order[:limit]:
         matching = [
@@ -2673,7 +2982,7 @@ def route_plan(
             capability = describe_choice_capability(matching[0])
             capability["budget"] = item.get("budget")
             state = states.get(_choice_key(matching[0]))
-            capability["available_now"] = _is_available(matching[0], states)
+            capability.update(_route_health_snapshot(settings, matching[0], states, evidence))
             capability["cooldown_reason"] = state.reason if state else None
             ordered.append(capability)
         else:
@@ -2712,7 +3021,7 @@ def route_plan(
                 max_cost_usd,
             )
             state = states.get(_choice_key(choice))
-            capability["available_now"] = _is_available(choice, states)
+            capability.update(_route_health_snapshot(settings, choice, states, evidence))
             capability["cooldown_reason"] = state.reason if state else None
             paid_preview.append(capability)
 
@@ -2806,7 +3115,14 @@ def transcribe_media(
         if not command or not model_path:
             raise RuntimeError("whisper.cpp 未就绪：需要 whisper-cli 命令和 SMART_LLM_ASR_WHISPER_CPP_MODEL 模型路径。")
         subprocess.run(
-            [command, "-m", str(Path(model_path).expanduser()), "-f", str(wav_path), "-l", language, "-otxt", "-osrt", "-of", str(out_dir / source.stem)],
+            _whisper_cpp_transcribe_command(
+                command,
+                model_path,
+                wav_path,
+                language,
+                out_dir / source.stem,
+                no_gpu=bool(status["backends"]["whisper_cpp"]["no_gpu"]),
+            ),
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -2894,6 +3210,23 @@ def _estimated_cost_usd(choice: LLMChoice, input_tokens: int, output_tokens: int
     return round((input_tokens * input_price + output_tokens * output_price) / 1_000_000, 8)
 
 
+def _local_ollama_reasoning_effort(choice: LLMChoice) -> str | None:
+    provider = choice.provider
+    parsed = urlparse(provider.base_url)
+    if (
+        provider.billing_class != "local"
+        or "ollama" not in provider.name.lower()
+        or (parsed.hostname or "").lower() not in {"127.0.0.1", "localhost", "::1"}
+    ):
+        return None
+    value = os.getenv("SMART_LLM_OLLAMA_REASONING_EFFORT", "none").strip().lower()
+    if value in {"", "auto", "default"}:
+        return None
+    if value not in {"none", "low", "medium", "high"}:
+        raise RuntimeError("SMART_LLM_OLLAMA_REASONING_EFFORT 仅支持 none、low、medium、high 或 auto")
+    return value
+
+
 def _call_openai_compatible(choice: LLMChoice, *, messages: list[dict[str, Any]], timeout: float, temperature: float, max_tokens: int | None = None) -> tuple[str, dict[str, Any]]:
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
@@ -2901,6 +3234,9 @@ def _call_openai_compatible(choice: LLMChoice, *, messages: list[dict[str, Any]]
     payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": temperature}
     if max_tokens:
         payload["max_tokens"] = max_tokens
+    reasoning_effort = _local_ollama_reasoning_effort(choice)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     with httpx.Client(timeout=timeout) as client:
         response = client.post(
             choice.provider.base_url.rstrip("/") + "/chat/completions",
@@ -3336,7 +3672,14 @@ def _health_probe_tasks(tasks: list[str] | tuple[str, ...] | None) -> list[str]:
 
 def refresh_model_pool(settings: Settings, *, include_paid: bool = False, timeout: float = 6.0, limit: int = 0) -> list[dict[str, Any]]:
     states = _load_route_state(settings)
-    choices = _rank_choices(configured_models(settings, only_free=not include_paid), "qa")
+    choices = _rank_choices(
+        [
+            choice
+            for choice in configured_models(settings, only_free=not include_paid)
+            if _provider_execution_enabled(choice.provider)
+        ],
+        "qa",
+    )
     if not include_paid:
         choices = [choice for choice in choices if choice.provider.free]
     if limit > 0:
@@ -3583,6 +3926,8 @@ def run_llm_task(
         avoid_routes=avoid_routes,
         quality_target=quality_target,
         privacy=privacy_mode,
+        allow_external=allow_external,
+        max_cost_usd=max_cost_usd,
         complexity_label=complexity["label"],
         complexity_source=complexity["complexity_source"],
         complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
@@ -3606,6 +3951,43 @@ def run_llm_task(
     if _cache_enabled():
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
+        cached_choice: LLMChoice | None = None
+        if isinstance(cached, dict) and cached.get("content"):
+            cached_choice, policy_error = _cached_choice_policy_status(
+                settings,
+                cached,
+                task=task,
+                prefer_free=prefer_free,
+                paid_fallback=paid_fallback,
+                provider=provider,
+                model=model,
+                quality_target=quality_target,
+                privacy=privacy_mode,
+                allow_external=allow_external,
+                max_cost_usd=max_cost_usd,
+                input_tokens=int(complexity.get("token_estimate") or 0) + 128,
+            )
+            if policy_error:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "cache_policy_rejected",
+                        "task": task,
+                        "provider": cached.get("provider"),
+                        "model": cached.get("model"),
+                        "free": cached.get("free"),
+                        "complexity": complexity,
+                        "cache_debug": cache_debug,
+                        "policy_error": policy_error,
+                        "input_tokens_est": 0,
+                        "output_tokens_est": 0,
+                        "estimated_cost_usd": 0.0,
+                    },
+                )
+                cache.pop(cache_key, None)
+                _save_response_cache(settings, cache)
+                cached = None
         if isinstance(cached, dict) and cached.get("content"):
             output_valid, output_error = _validate_structured_output(str(cached["content"]), required_output_format)
             if not output_valid:
@@ -3639,7 +4021,13 @@ def run_llm_task(
                     "task": task,
                     "provider": cached.get("provider"),
                     "model": cached.get("model"),
-                    "free": cached.get("free"),
+                    "free": cached_choice.provider.free if cached_choice else cached.get("free"),
+                    "billing_class": (
+                        cached_choice.provider.billing_class
+                        if cached_choice
+                        else cached.get("billing_class")
+                    ),
+                    "privacy": privacy_mode,
                     "complexity": complexity,
                     "cache_debug": cache_debug,
                     "input_tokens_est": 0,
@@ -3648,14 +4036,12 @@ def run_llm_task(
                 },
             )
             return LLMResult(provider=str(cached.get("provider") or "cache"), model=str(cached.get("model") or "cache"), content=str(cached["content"]), cached=True, complexity=complexity["label"], ledger_id=ledger_id)
-    if privacy_mode == "local_only" and not allow_external:
-        raise RuntimeError(
-            "输入被隐私门识别为 local_only，已阻止外部模型调用。确认资料可上传后使用 --allow-external，或改用本地流程。"
-        )
-    _maybe_auto_discover_free_pool(settings)
+    local_only_enforced = privacy_mode == "local_only" and not allow_external
+    if not local_only_enforced:
+        _maybe_auto_discover_free_pool(settings)
     states = _load_route_state(settings)
     if task in ROLE_TASKS:
-        if prefer_free:
+        if prefer_free and not local_only_enforced:
             states = _maybe_refresh_when_free_pool_empty(settings, states, task)
         role_choices = [
             choice
@@ -3677,7 +4063,8 @@ def run_llm_task(
             )
         choices = role_choices
     elif prefer_free:
-        states = _maybe_refresh_when_free_pool_empty(settings, states, task)
+        if not local_only_enforced:
+            states = _maybe_refresh_when_free_pool_empty(settings, states, task)
         active_free = [choice for choice in _model_choices(settings, task=task, only_free=True) if _is_available(choice, states)]
         paid_pool = [] if not paid_fallback else [
             choice
@@ -3693,6 +4080,18 @@ def run_llm_task(
         ]
         free_pool = [choice for choice in _model_choices(settings, task=task, only_free=True) if _is_available(choice, states)]
         choices = paid_pool + free_pool
+    if local_only_enforced:
+        choices = [choice for choice in choices if _is_trusted_local_choice(choice)]
+        if not choices:
+            raise RuntimeError(
+                "输入被隐私门识别为 local_only，且没有受信任的本机 loopback 模型可用；已阻止外部模型调用。"
+            )
+    evidence = _load_route_health(settings)
+    choices = [
+        choice
+        for choice in choices
+        if _is_execution_eligible_choice(settings, choice, states, evidence)
+    ]
     if provider or model:
         filtered = _filter_choices(choices, provider=provider, model=model)
         if not filtered:
@@ -3777,6 +4176,10 @@ def run_llm_task(
                     "provider": choice.provider.name,
                     "model": choice.model,
                     "free": choice.provider.free,
+                    "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+                    "privacy": privacy_mode,
+                    "allow_external": allow_external,
+                    "cache_policy_version": CACHE_POLICY_VERSION,
                     "content": content,
                 }
                 _save_response_cache(settings, cache)
@@ -3977,17 +4380,27 @@ def transcript_correct(
 
 
 def discover_openrouter_free(limit: int = 20) -> list[dict[str, Any]]:
-    key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
     with httpx.Client(timeout=30) as client:
-        response = client.get("https://openrouter.ai/api/v1/models?output_modalities=text", headers=headers)
+        response = client.get("https://openrouter.ai/api/v1/models?output_modalities=text")
         response.raise_for_status()
         data = response.json()
     rows = []
     for model in data.get("data") or []:
         model_id = str(model.get("id") or "")
         if model_id.endswith(":free"):
-            rows.append({"provider": "openrouter", "id": model_id, "name": model.get("name") or model_id, "context_length": int(model.get("context_length") or 0), "created": int(model.get("created") or 0), "free_signal": ":free suffix"})
+            rows.append(
+                {
+                    "provider": "openrouter",
+                    "id": model_id,
+                    "name": model.get("name") or model_id,
+                    "context_length": int(model.get("context_length") or 0),
+                    "created": int(model.get("created") or 0),
+                    "free_signal": ":free suffix in public catalog; credential and runtime probes required",
+                    "catalog_access": "public",
+                    "credential_validated": False,
+                    "runtime_probe_required": True,
+                }
+            )
     rows.sort(key=lambda row: (row["context_length"], row["created"]), reverse=True)
     return rows[:limit]
 
@@ -4016,10 +4429,8 @@ def _model_mentions_vision(model: dict[str, Any]) -> bool:
 
 
 def discover_openrouter_vision_free(limit: int = 20) -> list[dict[str, Any]]:
-    key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
     with httpx.Client(timeout=30) as client:
-        response = client.get("https://openrouter.ai/api/v1/models", headers=headers)
+        response = client.get("https://openrouter.ai/api/v1/models")
         response.raise_for_status()
         data = response.json()
     rows = []
@@ -4037,22 +4448,84 @@ def discover_openrouter_vision_free(limit: int = 20) -> list[dict[str, Any]]:
                 "context_length": int(model.get("context_length") or 0),
                 "created": int(model.get("created") or 0),
                 "input_modalities": model.get("architecture", {}).get("input_modalities") if isinstance(model.get("architecture"), dict) else None,
-                "free_signal": ":free suffix + vision/image metadata or model name",
+                "free_signal": ":free suffix + vision/image metadata in public catalog; credential and runtime probes required",
+                "catalog_access": "public",
+                "credential_validated": False,
+                "runtime_probe_required": True,
             }
         )
     rows.sort(key=lambda row: (row["context_length"], row["created"]), reverse=True)
     return rows[:limit]
 
 
+def _nvidia_general_chat_candidate(model_id: str) -> bool:
+    """Keep NVIDIA discovery out of specialist-only and non-chat lanes."""
+    text = model_id.lower()
+    specialist_terms = (
+        "embed",
+        "bge-",
+        "retriever",
+        "rerank",
+        "rankqa",
+        "reward",
+        "guard",
+        "safety",
+        "detector",
+        "detection",
+        "parse",
+        "nvclip",
+        "deplot",
+        "fuyu",
+        "kosmos",
+        "vision",
+        "-vl",
+        "multimodal",
+        "omni",
+        "vila",
+        "neva",
+        "diffusion",
+        "flux",
+        "image",
+        "video",
+        "cosmos",
+        "calibration",
+        "translate",
+        "whisper",
+        "speech",
+        "audio",
+        "palmyra-fin",
+        "palmyra-med",
+    )
+    if any(term in text for term in specialist_terms):
+        return False
+    return not _model_mentions_vision({"id": model_id})
+
+
 def discover_nvidia_models(limit: int = 50) -> list[dict[str, Any]]:
-    key = os.getenv("NVIDIA_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("缺少 NVIDIA_API_KEY")
     with httpx.Client(timeout=30) as client:
-        response = client.get("https://integrate.api.nvidia.com/v1/models", headers={"Authorization": f"Bearer {key}"})
+        response = client.get("https://integrate.api.nvidia.com/v1/models")
         response.raise_for_status()
         data = response.json()
-    return [{"provider": "nvidia", "id": model.get("id") or model.get("name") or "", "object": model.get("object") or "", "owned_by": model.get("owned_by") or "", "free_signal": "available in NVIDIA NIM account"} for model in (data.get("data") or [])[:limit]]
+    rows = []
+    for model in data.get("data") or []:
+        model_id = str(model.get("id") or model.get("name") or "").strip()
+        if not model_id or not _nvidia_general_chat_candidate(model_id):
+            continue
+        rows.append(
+            {
+                "provider": "nvidia",
+                "id": model_id,
+                "object": model.get("object") or "",
+                "owned_by": model.get("owned_by") or "",
+                "billing_class": "trial_quota",
+                "model_mode": "text_or_code_candidate",
+                "free_signal": "visible in public NVIDIA catalog; credential and runtime probes required",
+                "catalog_access": "public",
+                "credential_validated": False,
+                "runtime_probe_required": True,
+            }
+        )
+    return rows[:limit]
 
 
 def discover_ark_models(limit: int = 100) -> list[dict[str, Any]]:
@@ -4086,11 +4559,8 @@ def discover_ark_models(limit: int = 100) -> list[dict[str, Any]]:
 
 
 def discover_nvidia_vision_models(limit: int = 50) -> list[dict[str, Any]]:
-    key = os.getenv("NVIDIA_API_KEY", "").strip()
-    if not key:
-        raise RuntimeError("缺少 NVIDIA_API_KEY")
     with httpx.Client(timeout=30) as client:
-        response = client.get("https://integrate.api.nvidia.com/v1/models", headers={"Authorization": f"Bearer {key}"})
+        response = client.get("https://integrate.api.nvidia.com/v1/models")
         response.raise_for_status()
         data = response.json()
     rows = []
@@ -4103,7 +4573,10 @@ def discover_nvidia_vision_models(limit: int = 50) -> list[dict[str, Any]]:
                 "id": model.get("id") or model.get("name") or "",
                 "object": model.get("object") or "",
                 "owned_by": model.get("owned_by") or "",
-                "free_signal": "available in NVIDIA NIM account + vision-like metadata/name",
+                "free_signal": "vision-like metadata/name in public NVIDIA catalog; credential and runtime probes required",
+                "catalog_access": "public",
+                "credential_validated": False,
+                "runtime_probe_required": True,
             }
         )
     return rows[:limit]
@@ -4117,22 +4590,209 @@ def discover_groq_models(limit: int = 50) -> list[dict[str, Any]]:
         response = client.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {key}"})
         response.raise_for_status()
         data = response.json()
-    return [{"provider": "groq", "id": model.get("id") or "", "owned_by": model.get("owned_by") or "", "active": model.get("active"), "context_window": model.get("context_window") or model.get("context_length") or "", "free_signal": "available in Groq account"} for model in (data.get("data") or [])[:limit]]
+    return [
+        {
+            "provider": "groq",
+            "id": model.get("id") or "",
+            "owned_by": model.get("owned_by") or "",
+            "active": model.get("active"),
+            "context_window": model.get("context_window") or model.get("context_length") or "",
+            "free_signal": "visible through authenticated Groq catalog; runtime probe required",
+            "catalog_access": "authenticated",
+            "credential_validated": True,
+            "runtime_probe_required": True,
+        }
+        for model in (data.get("data") or [])[:limit]
+    ]
+
+
+CREDENTIAL_STATUS_FAMILIES = ("openrouter", "qwen", "nvidia", "groq")
+
+
+def _credential_probe_target(provider: LLMProvider) -> tuple[str, str]:
+    family = _provider_family(provider)
+    if family == "openrouter":
+        return "GET", "https://openrouter.ai/api/v1/key"
+    if family in {"qwen", "groq"}:
+        return "GET", provider.base_url.rstrip("/") + "/models"
+    if family == "nvidia":
+        return "POST", provider.base_url.rstrip("/") + "/chat/completions"
+    raise ValueError(f"不支持凭证探测的 provider family：{family}")
+
+
+def _probe_credential(provider: LLMProvider, *, timeout: float) -> dict[str, Any]:
+    family = _provider_family(provider)
+    key = os.getenv(provider.api_key_env, "").strip()
+    base = {
+        "provider_family": family,
+        "provider_name": provider.name,
+        "credential_slot": provider.api_key_env,
+        "model_call_performed": False,
+        "paid_call_performed": False,
+        "callability": "not_tested",
+    }
+    if not key:
+        return {
+            **base,
+            "probe_method": "none",
+            "http_status": None,
+            "credential_status": "missing",
+            "credential_accepted": False,
+            "evidence_scope": "configuration_only",
+        }
+
+    method, url = _credential_probe_target(provider)
+    headers = {"Authorization": f"Bearer {key}"}
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            if method == "POST":
+                response = client.post(url, headers=headers, json={})
+            else:
+                response = client.get(url, headers=headers)
+    except httpx.TimeoutException as exc:
+        return {
+            **base,
+            "probe_method": method,
+            "http_status": None,
+            "credential_status": "network_error",
+            "credential_accepted": None,
+            "evidence_scope": "network_path_only",
+            "error_type": type(exc).__name__,
+        }
+    except httpx.TransportError as exc:
+        return {
+            **base,
+            "probe_method": method,
+            "http_status": None,
+            "credential_status": "network_error",
+            "credential_accepted": None,
+            "evidence_scope": "network_path_only",
+            "error_type": type(exc).__name__,
+        }
+    except Exception as exc:
+        return {
+            **base,
+            "probe_method": method,
+            "http_status": None,
+            "credential_status": "indeterminate",
+            "credential_accepted": None,
+            "evidence_scope": "probe_error",
+            "error_type": type(exc).__name__,
+        }
+
+    status = response.status_code
+    evidence_scope = "credential_authentication"
+    if 200 <= status < 300:
+        credential_status = "accepted"
+        credential_accepted: bool | None = True
+    elif family == "nvidia" and status in {400, 422}:
+        credential_status = "indeterminate"
+        credential_accepted = None
+        evidence_scope = "request_validation_only"
+    elif status == 401:
+        credential_status = "rejected"
+        credential_accepted = False
+    elif status == 403:
+        credential_status = "permission_denied"
+        credential_accepted = None
+    else:
+        credential_status = "indeterminate"
+        credential_accepted = None
+    return {
+        **base,
+        "probe_method": method,
+        "http_status": status,
+        "credential_status": credential_status,
+        "credential_accepted": credential_accepted,
+        "evidence_scope": evidence_scope,
+    }
+
+
+def credential_status(
+    settings: Settings,
+    *,
+    families: list[str] | tuple[str, ...] | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    requested = tuple(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in (families or CREDENTIAL_STATUS_FAMILIES)
+            if str(item).strip()
+        )
+    )
+    unsupported = [family for family in requested if family not in CREDENTIAL_STATUS_FAMILIES]
+    if unsupported:
+        raise ValueError("不支持的凭证检查 family：" + ",".join(unsupported))
+
+    targets: list[LLMProvider] = []
+    seen: set[tuple[str, str]] = set()
+    for family in requested:
+        candidates = sorted(
+            (
+                provider
+                for provider in settings.providers
+                if provider.free
+                and provider.billing_class != "local"
+                and not provider.api_key_env.startswith("DISABLED_")
+                and _provider_family(provider) == family
+            ),
+            key=lambda provider: (provider.priority, provider.name),
+        )
+        for provider in candidates:
+            identity = (family, provider.api_key_env)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            targets.append(provider)
+
+    results = [_probe_credential(provider, timeout=timeout) for provider in targets]
+    return {
+        "scope": "configured_free_remote_credentials",
+        "families": list(requested),
+        "results": results,
+        "summary": {
+            "credential_slots": len(results),
+            "accepted": sum(row["credential_status"] == "accepted" for row in results),
+            "rejected": sum(row["credential_status"] == "rejected" for row in results),
+            "permission_denied": sum(row["credential_status"] == "permission_denied" for row in results),
+            "network_error": sum(row["credential_status"] == "network_error" for row in results),
+            "missing": sum(row["credential_status"] == "missing" for row in results),
+            "indeterminate": sum(row["credential_status"] == "indeterminate" for row in results),
+            "model_calls": 0,
+            "paid_calls": 0,
+        },
+    }
 
 
 def discover_free_pool(settings: Settings, limit: int = 20) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for name, fn in {
-        "openrouter": lambda: discover_openrouter_free(limit),
-        "nvidia": lambda: discover_nvidia_models(limit),
-        "openrouter_vision": lambda: discover_openrouter_vision_free(limit),
-        "nvidia_vision": lambda: discover_nvidia_vision_models(limit),
-        "groq": lambda: discover_groq_models(limit),
+    for name, (fn, metadata) in {
+        "openrouter": (
+            lambda: discover_openrouter_free(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
+        "nvidia": (
+            lambda: discover_nvidia_models(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
+        "openrouter_vision": (
+            lambda: discover_openrouter_vision_free(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
+        "nvidia_vision": (
+            lambda: discover_nvidia_vision_models(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
+        "groq": (
+            lambda: discover_groq_models(limit),
+            {"catalog_access": "authenticated", "credential_validated": True, "runtime_probe_required": True},
+        ),
     }.items():
         try:
-            out[name] = {"ok": True, "models": fn()}
+            out[name] = {**metadata, "ok": True, "models": fn()}
         except Exception as exc:
-            out[name] = {"ok": False, "error": str(exc).replace("\n", " ")[:240], "models": []}
+            out[name] = {**metadata, "credential_validated": False, "ok": False, "error": str(exc).replace("\n", " ")[:240], "models": []}
     _record_discovered_free_models(
         settings,
         {name: value["models"] for name, value in out.items() if value.get("ok") and isinstance(value.get("models"), list)},
@@ -4142,14 +4802,20 @@ def discover_free_pool(settings: Settings, limit: int = 20) -> dict[str, Any]:
 
 def discover_vision_pool(settings: Settings, limit: int = 20) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for name, fn in {
-        "openrouter_vision": lambda: discover_openrouter_vision_free(limit),
-        "nvidia_vision": lambda: discover_nvidia_vision_models(limit),
+    for name, (fn, metadata) in {
+        "openrouter_vision": (
+            lambda: discover_openrouter_vision_free(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
+        "nvidia_vision": (
+            lambda: discover_nvidia_vision_models(limit),
+            {"catalog_access": "public", "credential_validated": False, "runtime_probe_required": True},
+        ),
     }.items():
         try:
-            out[name] = {"ok": True, "models": fn()}
+            out[name] = {**metadata, "ok": True, "models": fn()}
         except Exception as exc:
-            out[name] = {"ok": False, "error": str(exc).replace("\n", " ")[:240], "models": []}
+            out[name] = {**metadata, "ok": False, "error": str(exc).replace("\n", " ")[:240], "models": []}
     _record_discovered_free_models(
         settings,
         {name: value["models"] for name, value in out.items() if value.get("ok") and isinstance(value.get("models"), list)},

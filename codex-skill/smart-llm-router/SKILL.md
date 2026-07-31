@@ -108,10 +108,18 @@ Default behavior:
 - Use explicit production roles: Qwen/Kimi for planning, GLM/DeepSeek for execution, Gemini Free Tier/DeepSeek/Qwen for audit, a family different from execution for verification, and conditional Kimi/Qwen quality enhancement.
 - Treat same-model key rotation as availability failover only. Plan audit must differ from planning, and final verification must differ from execution; the five roles do not require five unique providers.
 - Distinguish `permanent_free`, `trial_quota`, and `paid`; Qwen, NVIDIA, and Ark trial resources are not permanent-free promises.
+- Fail closed when a route claims free while using `trial_quota`. Set that provider block's
+  `SMART_LLM<n>_TRIAL_QUOTA_GUARDED=true` only after verifying current remaining
+  free quota and a hard stop that prevents paid overage.
 - Use `--privacy auto|local_only|external_allowed`; private images, chat records, identity data, and raw private media fail closed unless external upload is explicitly allowed.
 - Use `--max-cost-usd` for a hard task budget. Unknown paid prices fail closed when a budget is present.
 - If a model fails with 429, timeout, 403/404, or empty content, mark it in cooldown and skip it next time.
 - If the free pool appears fully cooled down, run a light refresh before using paid fallback.
+- Diagnose free remote routes in three separate layers: public/authenticated catalog discovery,
+  `credential-status` authentication evidence, and a fresh `refresh` or `task` runtime probe.
+  Never treat OpenRouter or NVIDIA public catalog HTTP 200 as credential validation.
+  NVIDIA empty-request HTTP 400/422 is request-validation evidence only and
+  remains `indeterminate`; it is not accepted-credential evidence.
 - Prefer `refresh-modalities` for important checks; it probes text, vision/OCR, transcript correction, and code routes separately instead of treating a generic QA success as global health.
 - The public template keeps Gemini in free-tier mode. Suppress paid Gemini unless `SMART_LLM_GEMINI_PAID_ENABLED=true`; use its free tier only for public, non-sensitive inputs because quota is restricted and free-tier content may be used for product improvement.
 - Role routing is quality-and-cost aware across DeepSeek V4, Qwen 3.7, GLM-5.2, Kimi K3, Gemini Free Tier, and Doubao Seed 2.1/2.0. A public model name is only a candidate until its current endpoint passes a live probe.
@@ -176,6 +184,7 @@ After changes, run:
 
 ```bash
 python -m compileall smart_llm_router
+smart-llm-router credential-status
 smart-llm-router refresh --timeout 6 --limit 5
 smart-llm-router task "只输出 OK" --task qa --free-only
 ```

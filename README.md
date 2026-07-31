@@ -3,8 +3,10 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.6.0 stable candidate adds credential-catalog hardening and dotted Qwen key
-support on top of the controlled task descriptor v2, cache isolation,
+The 0.7.0 stable candidate adds policy-aware cache revalidation, explicit
+free-route health and credential semantics, safe NVIDIA discovery, local
+Ollama compatibility, and optional whisper.cpp no-GPU execution on top of
+credential-catalog hardening, the controlled task descriptor v2,
 strict JSON output validation, and evidence-backed task contracts,
 adapter lifecycle governance, goal-locked workflow planning, quality-band free-first role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
@@ -70,6 +72,7 @@ $HOME/.local/state/smart-llm-router
 - 隐私与预算门：私人图片、聊天记录、身份信息和原始音视频默认 `local_only`；`--max-cost-usd` 下未知价格的付费模型失败关闭。
 - 多模态路由预演：`route-plan` 会先输出任务描述器、本地步骤、免费池、低价付费和 Codex 审计路线，不调用模型。
 - Provider-family 能力注册表：`capabilities` 会区分“供应商 API key 已知可支持的模型态”和“当前已配置、已探活、可执行路由的具体模型”，覆盖文本、视觉/OCR、ASR、图像/视频生成、embedding、rerank、code 等。
+- 本地 Whisper 稳定模式：`SMART_LLM_ASR_WHISPER_CPP_NO_GPU=true` 会为 whisper.cpp 加入官方 `-ng/--no-gpu` 参数；公共默认保持 `false`，只在 GPU/Metal 路径不稳定的主机启用。
 - 转写稿分块纠错：`transcript-correct` 会把长篇 ASR 文本分块修正并落盘，避免编排层加载整份原始转写稿。
 - 免费池优先：优先尝试免费模型，失败自动换下一个。
 - 视觉模型路由：支持本地图片 `--image`，自动转换为 OpenAI-compatible 多模态消息。
@@ -85,6 +88,9 @@ $HOME/.local/state/smart-llm-router
 - 响应缓存：相同任务和上下文命中本地缓存，避免重复花 token。
 - 本地检索前置：可从本地 `txt/md` 资料目录检索相关片段，再注入模型上下文。
 - 动态模型发现：OpenRouter、NVIDIA、Groq 候选目录默认每 6 小时按需刷新，单家发现失败会保留上次清单；OpenRouter/NVIDIA 同时发现视觉候选。
+- NVIDIA 免费端点按 `trial_quota` 管理：目录可见不等于调用成功或生产许可；通用文本/代码候选与视觉、embedding、rerank、安全、reward、检测、解析等专用模型隔离，实际调用前仍需健康探针。
+- 动态发现的 NVIDIA 候选继承同供应商多 key 轮换；某个 key 对具体模型返回 401/403 时可尝试下一条已配置路线，但不会把鉴权失败冒充为模型故障或免费保证。
+- 标记为免费且 `billing_class=trial_quota` 的路线默认不进入执行池。只有逐个 Provider 核实“当前仍有免费额度”且账户或模型已启用“额度耗尽即停止、不转付费”后，才可在本机私有配置设置 `SMART_LLM<n>_TRIAL_QUOTA_GUARDED=true`；目录标签、key 存在或旧调用成功都不能替代这两项证明。
 - 发现不等于生产晋级：新免费模型可进入通用任务池，规划、执行、审计和复验仍须通过基准测试并登记质量档。
 - 按模态健康检查：`refresh-modalities` 会分别用 text/vision/OCR/transcript/code 小探针验证模型，而不只用通用 QA。
 - 可迁移：`.env` + 本目录即可复制到其他电脑。
@@ -96,7 +102,7 @@ $HOME/.local/state/smart-llm-router
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.6.0/smart_llm_router-0.6.0-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.7.0/smart_llm_router-0.7.0-py3-none-any.whl"
 smart-llm-router --help
 ```
 
@@ -124,6 +130,7 @@ cp .env.example .env
 smart-llm-router --help
 smart-llm-router providers
 smart-llm-router capabilities --configured-only
+smart-llm-router credential-status
 smart-llm-router recommend "Return OK" --task qa --free-only
 smart-llm-router route-plan "Return OK" --task qa --quality-target production
 smart-llm-router task "Return OK" --task qa --free-only
@@ -132,6 +139,14 @@ smart-llm-router status
 smart-llm-router ledger --limit 20
 smart-llm-router route-stats --task qa --limit 1000
 ```
+
+`credential-status` 只检查已配置的 OpenRouter、Qwen、NVIDIA 和 Groq 免费远端凭证，
+不会调用任何模型或付费路线，也不输出 key。它与模型发现、真实调用是三层独立证据：
+公共目录可见不代表凭证有效，凭证被接受也不代表某个模型当前可调用。OpenRouter 和
+NVIDIA 的发现命令只读取公共目录；Groq 发现使用认证目录；所有候选仍须通过
+`refresh` 或 `task` 的真实运行探针。NVIDIA 当前没有被本工具采用的无推理认证接口；
+对空 completion 请求返回的 HTTP 400/422 只证明请求进入校验层，状态记为
+`indeterminate`，不能据此标记 key 已被接受。
 
 正常的 `recommend`、`route-plan` 和 `task` 会在免费模型目录过期时按需发现新候选。可用
 `SMART_LLM_AUTO_DISCOVER_FREE=false` 关闭，或用 `SMART_LLM_DISCOVERY_TTL_HOURS` 调整刷新周期；

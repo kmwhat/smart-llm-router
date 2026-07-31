@@ -60,7 +60,7 @@ class RouteStatsTests(unittest.TestCase):
 
     def test_degraded_free_route_loses_to_healthy_paid_route_in_same_band(self) -> None:
         providers = (
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 2, "paid"),
         )
         settings = self._settings(providers)
@@ -89,7 +89,7 @@ class RouteStatsTests(unittest.TestCase):
     def test_higher_quality_band_still_wins_when_its_route_is_degraded(self) -> None:
         providers = (
             LLMProvider("qwen-frontier-paid", "https://qwen.test/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid"),
-            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 2, "trial_quota"),
+            LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 2, "trial_quota", True),
         )
         settings = self._settings(providers)
         for _ in range(3):
@@ -147,8 +147,10 @@ class RouteStatsTests(unittest.TestCase):
 
         self.assertEqual(result["recommended_order"][0]["model"], "deepseek-v4-pro")
 
-    def test_failure_classifier_keeps_auth_and_timeout_distinct(self) -> None:
+    def test_failure_classifier_keeps_auth_permission_network_and_timeout_distinct(self) -> None:
         self.assertEqual(classify_route_failure("HTTP 401 invalid API key"), "authentication")
+        self.assertEqual(classify_route_failure("HTTP 403 Forbidden"), "permission_denied")
+        self.assertEqual(classify_route_failure("[Errno 54] Connection reset by peer"), "infrastructure")
         self.assertEqual(classify_route_failure("The read operation timed out"), "timeout")
 
 
