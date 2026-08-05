@@ -241,10 +241,10 @@ class TaskDescriptorV2Tests(unittest.TestCase):
         self.assertEqual(_validate_structured_output('{"status":"ok"}', "json"), (True, None))
         self.assertEqual(
             _validate_structured_output('```json\n{"status":"ok"}\n```', "json"),
-            (False, "strict_json_parse_failed"),
+            (False, "structured_output_code_fence_forbidden"),
         )
 
-    def test_strict_json_rejection_falls_back_without_cooling_healthy_route(self) -> None:
+    def test_strict_json_rejection_fails_closed_without_fallback_or_cooling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(
                 data_dir=Path(tmp),
@@ -266,13 +266,14 @@ class TaskDescriptorV2Tests(unittest.TestCase):
                 clear=False,
             ):
                 with patch("smart_llm_router.router._call_openai_compatible", side_effect=responses) as call:
-                    result = run_llm_task(
-                        settings,
-                        task="qa",
-                        prompt='只返回严格 JSON：{"status":"ok"}',
-                        paid_fallback=False,
-                        privacy="external_allowed",
-                    )
+                    with self.assertRaisesRegex(RuntimeError, "governed structured output invalid"):
+                        run_llm_task(
+                            settings,
+                            task="qa",
+                            prompt='只返回严格 JSON：{"status":"ok"}',
+                            paid_fallback=False,
+                            privacy="external_allowed",
+                        )
             ledger = [
                 json.loads(line)
                 for line in (settings.data_dir / "llm_cost_ledger.jsonl").read_text(encoding="utf-8").splitlines()
@@ -280,10 +281,9 @@ class TaskDescriptorV2Tests(unittest.TestCase):
             state_path = settings.data_dir / "llm_router_state.json"
             state_exists = state_path.exists()
 
-        self.assertEqual(call.call_count, 2)
-        self.assertEqual(result.provider, "second-free")
-        self.assertEqual(result.content, '{"status":"ok"}')
-        self.assertEqual([row["event"] for row in ledger], ["model_output_rejected", "model_call"])
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual([row["event"] for row in ledger], ["invalid_structured_output"])
+        self.assertEqual(ledger[0]["decision"], "fail_closed_no_retry_no_fallback")
         self.assertFalse(state_exists)
 
 

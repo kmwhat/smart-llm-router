@@ -6,16 +6,18 @@ from smart_llm_router.router import _clean_transcript_locally
 
 
 class PublicPackageBoundaryTests(unittest.TestCase):
-    def test_release_metadata_matches_package_version(self) -> None:
+    def test_release_metadata_matches_candidate_version(self) -> None:
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
         readiness = (root / "RELEASE_READINESS.md").read_text(encoding="utf-8")
-        self.assertIn(
+        self.assertIn(f"`{__version__}` 是当前发布候选版", readme)
+        self.assertNotIn(
             f"/releases/download/v{__version__}/smart_llm_router-{__version__}-py3-none-any.whl",
             readme,
         )
         self.assertIn(f"## {__version__} - ", changelog)
+        self.assertIn(f"## {__version__} ", readiness)
         current_readiness = readiness.split("## 0.6.0rc2", 1)[0]
         self.assertNotIn("not committed, pushed, tagged, or published", current_readiness)
 
@@ -83,6 +85,10 @@ class PublicPackageBoundaryTests(unittest.TestCase):
             "e585ade788bb",
             "e7b4abe5beae",
             "e591bde79086",
+            "416c6c5f415049322e747874",
+            "446f63756d656e74732f415049",
+            "e68a80e883bde4b8ade5bf83",
+            "e69cace69cbae585a8e5b180",
         )
         forbidden = tuple(bytes.fromhex(value).decode("utf-8") for value in encoded_tokens) + (
             "FENG" + "SHUI_",

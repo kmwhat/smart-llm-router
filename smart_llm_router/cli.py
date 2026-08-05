@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
+from . import __version__
+
 from .config import load_settings
+from .controls import build_control_preflight
 from .evaluation import build_promotion_decision, run_golden_evaluation, write_promotion_decision
 from .governance import (
     build_workflow_plan,
@@ -43,6 +47,7 @@ from .router import (
     refresh_model_pool_by_modality,
     asr_status,
     route_status,
+    router_doctor,
     run_llm_task,
     score_task_complexity,
     transcript_correct,
@@ -61,9 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="smart-llm-router", description="智能 LLM 路由：免费池优先、失败冷却、低价付费兜底")
     parser.add_argument("--env-file", help="指定 .env 文件，默认读取当前目录 .env")
     parser.add_argument("--credential-catalog", help="模型厂商凭据目录文件；仅在进程内装载，不输出值")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("providers", help="查看 provider 配置摘要，不输出 key")
+    doctor = sub.add_parser("doctor", help="离线检查配置、免费池、角色覆盖和被排除原因；不调用模型")
+    doctor.add_argument("--quality-target", choices=["draft", "production", "audit", "frontier"], default="production")
+    doctor.add_argument("--paid-allowed", action="store_true", help="只在诊断中展示可用付费路线，不执行调用")
+    doctor.add_argument("--max-cost-usd", type=float, help="诊断每阶段预算门；不会发起付费调用")
     caps = sub.add_parser("capabilities", help="查看 provider-family 多模态能力注册表，不输出 key")
     caps.add_argument("--configured-only", action="store_true", help="只显示当前已配置的 family")
     sub.add_parser("status", help="查看模型冷却状态")
@@ -82,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     golden_eval.add_argument("--baseline-model", help="基线 model 精确名称")
     golden_eval.add_argument("--output-dir")
     golden_eval.add_argument("--allow-paid", action="store_true", help="允许候选或基线调用付费路线；仍受 suite 单次成本门约束")
+    golden_eval.add_argument("--allow-unprotected-trial", action="store_true", help="显式允许黄金集消耗尚未声明硬停保护的试用额度；不会令其自动晋级")
 
     promotion = sub.add_parser("promotion-check", help="本地检查黄金集、健康、成本和独立盲审证据；不自动修改生产角色表")
     promotion.add_argument("report_file")
@@ -162,14 +173,16 @@ def build_parser() -> argparse.ArgumentParser:
     remote_asr.add_argument("--language", default="zh")
     remote_asr.add_argument("--timeout", type=float)
     remote_asr.add_argument("--allow-external", action="store_true", help="确认允许将该音频上传到指定厂商")
+    remote_asr.add_argument("--allow-paid", action="store_true", help="显式授权调用可能计费的远程 ASR 路线")
 
     correct = sub.add_parser("transcript-correct", help="长篇 ASR 转写稿分块纠错，并落盘 corrected/report")
     correct.add_argument("input_file")
     correct.add_argument("--output-dir")
     correct.add_argument("--domain", default="general", help="转写内容所属领域或主题，例如 software、finance、general")
     correct.add_argument("--chunk-chars", type=int, default=3500)
-    correct.add_argument("--free-only", action="store_true", help="只允许免费模型，禁用低价付费主修正")
-    correct.add_argument("--paid-main", action="store_true", help="主修正优先使用低价付费模型")
+    correct.add_argument("--free-only", action="store_true", help="只允许免费模型；这是默认行为")
+    correct.add_argument("--paid-main", action="store_true", help="显式授权主修正使用付费模型")
+    correct.add_argument("--max-cost-usd", type=float, help="付费主修正每个分块的成本硬上限")
     correct.add_argument("--cross-check", action="store_true", help="对每块增加二次模型交验")
     correct.add_argument("--quality-target", choices=["draft", "production", "audit"], default="production")
     correct.add_argument("--max-context-chars", type=int, default=7000)
@@ -183,6 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
     embed.add_argument("--dimensions", type=int, help="向量维度，例如 256、512、1024、2048")
     embed.add_argument("--timeout", type=float, help="单请求超时秒数")
     embed.add_argument("--full", action="store_true", help="输出完整向量；默认只输出维度和前 8 维预览")
+    embed.add_argument("--allow-paid", action="store_true", help="显式授权调用付费 embedding adapter")
 
     rerank = sub.add_parser("rerank", help="专用文本重排序 adapter，不走 chat/completions")
     rerank.add_argument("documents", nargs="*", help="候选文本；也可用 --documents-file")
@@ -193,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     rerank.add_argument("--top-n", type=int, default=0, help="只返回前 N 条；0 为返回全部")
     rerank.add_argument("--return-raw-scores", action="store_true", help="请求返回 raw scores")
     rerank.add_argument("--timeout", type=float, help="单请求超时秒数")
+    rerank.add_argument("--allow-paid", action="store_true", help="显式授权调用付费 rerank adapter")
 
     image_gen = sub.add_parser("image-generate", help="专用图像生成 adapter；必须显式允许付费")
     image_gen.add_argument("prompt")
@@ -207,12 +222,17 @@ def build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--include-paid", action="store_true", help="同时探活付费模型")
     refresh.add_argument("--timeout", type=float, default=6.0, help="单模型超时秒数")
     refresh.add_argument("--limit", type=int, default=0, help="最多探活多少个模型，0 为全部")
+    refresh.add_argument("--task", choices=TASK_CHOICES, default="qa", help="按任务或角色限定探活池")
+    refresh.add_argument("--quality-target", choices=["draft", "production", "audit", "frontier"], default="production")
+    refresh.add_argument("--include-unprotected-trial", action="store_true", help="显式探测尚未声明硬停保护的试用额度路线；只用于审计，不会令其进入生产执行")
+    refresh.add_argument("--no-progress", action="store_true", help="不在 stderr 输出逐模型进度；最终 JSON 仍写 stdout")
     refresh_modalities = sub.add_parser("refresh-modalities", help="按任务/模态探活模型池，更新冷却状态并写入模态报告")
     refresh_modalities.add_argument("--include-paid", action="store_true", help="同时探活付费模型")
     refresh_modalities.add_argument("--timeout", type=float, default=6.0, help="单模型超时秒数")
     refresh_modalities.add_argument("--limit", type=int, default=0, help="每个任务最多探活多少个模型，0 为全部")
     refresh_modalities.add_argument("--tasks", default="qa,vision,ocr,transcript_correct,code", help="逗号分隔任务，如 qa,vision,ocr,transcript_correct,code")
     refresh_modalities.add_argument("--families", default="", help="只探测指定 provider/model family，逗号分隔，如 zhipu,qwen,deepseek")
+    refresh_modalities.add_argument("--include-unprotected-trial", action="store_true", help="显式探测尚未声明硬停保护的试用额度路线")
 
     credential_check = sub.add_parser("credential-status", help="只检查免费远端凭证认证状态；不调用模型、不输出 key")
     credential_check.add_argument("--families", default="openrouter,qwen,nvidia,groq", help="逗号分隔 family，仅支持 openrouter,qwen,nvidia,groq")
@@ -243,10 +263,12 @@ def build_parser() -> argparse.ArgumentParser:
     bench = sub.add_parser("benchmark", help="快速实测免费池模型表现")
     bench.add_argument("--timeout", type=float, default=8.0)
     bench.add_argument("--limit", type=int, default=12)
+    bench.add_argument("--include-unprotected-trial", action="store_true", help="显式允许审计未声明硬停保护的试用额度路线")
     vision_bench = sub.add_parser("benchmark-vision", help="快速实测免费视觉模型表现")
     vision_bench.add_argument("image", help="用于视觉 smoke 的本地图片")
     vision_bench.add_argument("--timeout", type=float, default=12.0)
     vision_bench.add_argument("--limit", type=int, default=8)
+    vision_bench.add_argument("--include-unprotected-trial", action="store_true", help="显式允许审计未声明硬停保护的试用额度路线")
 
     task = sub.add_parser("task", help="执行一次路由调用")
     task.add_argument("prompt")
@@ -257,8 +279,8 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("--retrieve-dir", help="先从本地 txt/md 资料目录检索相关片段并注入 context")
     task.add_argument("--retrieve-limit", type=int, default=5)
     task.add_argument("--max-context-chars", type=int, default=0, help="本地裁剪 context 的最大字符数，0 为不裁剪")
-    task.add_argument("--paid", action="store_true", help="付费优先，但仍按低价兜底排序")
-    task.add_argument("--free-only", action="store_true", help="只允许免费模型，禁用付费兜底")
+    task.add_argument("--paid", action="store_true", help="显式授权付费路线；同时必须设置 --max-cost-usd")
+    task.add_argument("--free-only", action="store_true", help="只允许免费模型；这是默认行为")
     task.add_argument("--provider", help="限定 provider 名、provider family 或 model family，如 qwen / qwen-free / nvidia")
     task.add_argument("--model", help="限定模型名，可为完整模型 ID 或其唯一子串")
     task.add_argument("--avoid-route", action="append", default=[], help="避开已使用路线 provider/model；可重复传入，用于多模型对照")
@@ -268,6 +290,18 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("--privacy", choices=["auto", "local_only", "external_allowed"], default="auto")
     task.add_argument("--allow-external", action="store_true", help="确认允许把自动识别为敏感的输入发送到外部模型")
     task.add_argument("--max-cost-usd", type=float, help="单次调用预算上限；未知价格的付费模型会失败关闭")
+    task.add_argument("--input-token-guard-factor", type=float, help="提高本地输入 token 预算预留系数；不得低于内置安全下限")
+    task.add_argument("--max-output-tokens", type=int, help="限制本次模型最终输出长度；免费与付费路线都生效")
+    task.add_argument("--thinking-mode", choices=["auto", "enabled", "disabled"], default="auto", help="Qwen/DeepSeek 混合思考控制")
+    task.add_argument("--thinking-budget-tokens", type=int, help="Qwen reasoning token 硬上限")
+    task.add_argument("--final-answer-reserve-tokens", type=int, help="为最终正文单独预留的 token")
+    task.add_argument("--no-think", action="store_true", help="等价于 --thinking-mode disabled；也支持 prompt 中的 /no_think")
+    task.add_argument("--strict-controls", action="store_true", help="治理调用在路由、预留和发送前严格校验 SMART_LLM 控制变量")
+    task.add_argument("--no-cache", action="store_true", help="显式禁用本次请求的响应缓存读取与写入")
+    task.add_argument("--workflow-id", help="跨调用累计预算的工作流 ID")
+    task.add_argument("--workflow-max-cost-usd", type=float, help="工作流累计成本硬上限")
+    task.add_argument("--workflow-stage", help="本次调用的工作流阶段名")
+    task.add_argument("--timeout", type=float, help="本次单模型超时秒数；省略时使用全局设置")
     task.add_argument("--temperature", type=float, default=0.2)
     return parser
 
@@ -275,10 +309,42 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command == "task":
+        if args.paid and args.free_only:
+            parser.error("task 不能同时使用 --paid 和 --free-only")
+        if args.paid and args.max_cost_usd is None:
+            parser.error("task 使用 --paid 时必须同时设置 --max-cost-usd")
+        if args.max_cost_usd is not None and (not math.isfinite(args.max_cost_usd) or args.max_cost_usd < 0):
+            parser.error("task 的 --max-cost-usd 必须为有限非负数")
+        if bool(args.workflow_id) != (args.workflow_max_cost_usd is not None):
+            parser.error("task 的 --workflow-id 和 --workflow-max-cost-usd 必须同时设置")
+        if args.workflow_id and args.max_cost_usd is None:
+            parser.error("工作流预算调用必须同时设置 --max-cost-usd")
+        if args.workflow_max_cost_usd is not None and (
+            not math.isfinite(args.workflow_max_cost_usd) or args.workflow_max_cost_usd <= 0
+        ):
+            parser.error("task 的 --workflow-max-cost-usd 必须为有限正数")
+        if args.no_think and args.thinking_mode == "enabled":
+            parser.error("task 不能同时使用 --no-think 和 --thinking-mode enabled")
+        # Governed callers must reject unsupported controls before loading
+        # provider configuration, selecting a route, reserving budget, or
+        # sending a request. The returned object is rebuilt inside
+        # run_llm_task so programmatic callers receive the same protection.
+        build_control_preflight(
+            strict_controls=args.strict_controls,
+            explicit_cache_enabled=False if args.no_cache else None,
+        )
+    if args.command == "transcript-correct":
+        if args.paid_main and args.free_only:
+            parser.error("transcript-correct 不能同时使用 --paid-main 和 --free-only")
+        if args.paid_main and args.max_cost_usd is None:
+            parser.error("transcript-correct 使用 --paid-main 时必须同时设置 --max-cost-usd")
     settings = load_settings(args.env_file, args.credential_catalog)
 
     if args.command == "providers":
         print(json.dumps(describe_providers(settings), ensure_ascii=False, indent=2))
+    elif args.command == "doctor":
+        print(json.dumps(router_doctor(settings, quality_target=args.quality_target, paid_allowed=args.paid_allowed, max_cost_usd=args.max_cost_usd), ensure_ascii=False, indent=2))
     elif args.command == "capabilities":
         print(json.dumps(capability_registry(settings, configured_only=args.configured_only), ensure_ascii=False, indent=2))
     elif args.command == "status":
@@ -299,6 +365,7 @@ def main() -> None:
                     baseline_model=args.baseline_model,
                     output_dir=args.output_dir,
                     allow_paid=args.allow_paid,
+                    allow_unprotected_trial=args.allow_unprotected_trial,
                 ),
                 ensure_ascii=False,
                 indent=2,
@@ -395,7 +462,7 @@ def main() -> None:
     elif args.command == "transcribe":
         print(json.dumps(transcribe_media(settings, args.input_file, output_dir=args.output_dir, backend=args.backend, language=args.language, model=args.model, keep_audio=args.keep_audio), ensure_ascii=False, indent=2))
     elif args.command == "remote-transcribe":
-        print(json.dumps(remote_transcribe_media(settings, args.input_file, provider=args.provider, model=args.model, language=args.language, allow_external=args.allow_external, timeout=args.timeout), ensure_ascii=False, indent=2))
+        print(json.dumps(remote_transcribe_media(settings, args.input_file, provider=args.provider, model=args.model, language=args.language, allow_external=args.allow_external, allow_paid=args.allow_paid, timeout=args.timeout), ensure_ascii=False, indent=2))
     elif args.command == "transcript-correct":
         print(
             json.dumps(
@@ -405,11 +472,12 @@ def main() -> None:
                     output_dir=args.output_dir,
                     domain=args.domain,
                     chunk_chars=args.chunk_chars,
-                    free_only=args.free_only,
+                    free_only=not args.paid_main,
                     prefer_free=not args.paid_main,
                     cross_check=args.cross_check,
                     quality_target=args.quality_target,
                     max_context_chars=args.max_context_chars,
+                    max_cost_usd=args.max_cost_usd,
                 ),
                 ensure_ascii=False,
                 indent=2,
@@ -424,7 +492,7 @@ def main() -> None:
         texts = [text for text in texts if text]
         if not texts:
             parser.error("embed 需要至少一条文本，或使用 --input-file")
-        result = embed_texts(settings, texts, provider=args.provider, model=args.model, dimensions=args.dimensions, timeout=args.timeout)
+        result = embed_texts(settings, texts, provider=args.provider, model=args.model, dimensions=args.dimensions, timeout=args.timeout, allow_paid=args.allow_paid)
         if not args.full:
             compact = {key: value for key, value in result.items() if key != "data"}
             compact["data"] = [
@@ -441,18 +509,19 @@ def main() -> None:
         documents = [doc for doc in documents if doc]
         if not documents:
             parser.error("rerank 需要至少一条候选文本，或使用 --documents-file")
-        print(json.dumps(rerank_documents(settings, query=args.query, documents=documents, provider=args.provider, model=args.model, top_n=args.top_n, return_raw_scores=args.return_raw_scores, timeout=args.timeout), ensure_ascii=False, indent=2))
+        print(json.dumps(rerank_documents(settings, query=args.query, documents=documents, provider=args.provider, model=args.model, top_n=args.top_n, return_raw_scores=args.return_raw_scores, timeout=args.timeout, allow_paid=args.allow_paid), ensure_ascii=False, indent=2))
     elif args.command == "image-generate":
         print(json.dumps(generate_image(settings, args.prompt, provider=args.provider, model=args.model, size=args.size, quality=args.quality, allow_paid=args.allow_paid, timeout=args.timeout), ensure_ascii=False, indent=2))
     elif args.command == "clear":
         clear_route_state(settings)
         print("模型冷却状态已清空。")
     elif args.command == "refresh":
-        print(json.dumps(refresh_model_pool(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit), ensure_ascii=False, indent=2))
+        progress = None if args.no_progress else lambda row: print(json.dumps(row, ensure_ascii=False), file=sys.stderr, flush=True)
+        print(json.dumps(refresh_model_pool(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit, task=args.task, quality_target=args.quality_target, include_unprotected_trial=args.include_unprotected_trial, progress=progress), ensure_ascii=False, indent=2))
     elif args.command == "refresh-modalities":
         tasks = [item.strip() for item in args.tasks.split(",") if item.strip()]
         families = [item.strip() for item in args.families.split(",") if item.strip()]
-        print(json.dumps(refresh_model_pool_by_modality(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit, tasks=tasks, families=families), ensure_ascii=False, indent=2))
+        print(json.dumps(refresh_model_pool_by_modality(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit, tasks=tasks, families=families, include_unprotected_trial=args.include_unprotected_trial), ensure_ascii=False, indent=2))
     elif args.command == "credential-status":
         families = [item.strip() for item in args.families.split(",") if item.strip()]
         print(json.dumps(credential_status(settings, families=families, timeout=args.timeout), ensure_ascii=False, indent=2))
@@ -475,9 +544,9 @@ def main() -> None:
     elif args.command == "maintain":
         print(json.dumps(maintain_pool(settings, include_paid=args.include_paid, timeout=args.timeout, limit=args.limit), ensure_ascii=False, indent=2))
     elif args.command == "benchmark":
-        print(json.dumps(quick_benchmark(settings, timeout=args.timeout, limit=args.limit), ensure_ascii=False, indent=2))
+        print(json.dumps(quick_benchmark(settings, timeout=args.timeout, limit=args.limit, include_unprotected_trial=args.include_unprotected_trial), ensure_ascii=False, indent=2))
     elif args.command == "benchmark-vision":
-        print(json.dumps(quick_vision_benchmark(settings, args.image, timeout=args.timeout, limit=args.limit), ensure_ascii=False, indent=2))
+        print(json.dumps(quick_vision_benchmark(settings, args.image, timeout=args.timeout, limit=args.limit, include_unprotected_trial=args.include_unprotected_trial), ensure_ascii=False, indent=2))
     elif args.command == "task":
         context = args.context
         if args.context_file:
@@ -492,7 +561,7 @@ def main() -> None:
             prompt=args.prompt,
             context=context,
             prefer_free=not args.paid,
-            paid_fallback=not args.free_only,
+            paid_fallback=args.paid,
             temperature=args.temperature,
             max_context_chars=args.max_context_chars or None,
             image_path=args.image,
@@ -505,6 +574,17 @@ def main() -> None:
             privacy=args.privacy,
             allow_external=args.allow_external,
             max_cost_usd=args.max_cost_usd,
+            max_output_tokens=args.max_output_tokens,
+            thinking_mode="disabled" if args.no_think else args.thinking_mode,
+            thinking_budget_tokens=args.thinking_budget_tokens,
+            final_answer_reserve_tokens=args.final_answer_reserve_tokens,
+            workflow_id=args.workflow_id,
+            workflow_max_cost_usd=args.workflow_max_cost_usd,
+            workflow_stage=args.workflow_stage,
+            request_timeout=args.timeout,
+            strict_controls=args.strict_controls,
+            cache_enabled=False if args.no_cache else None,
+            input_token_guard_factor=args.input_token_guard_factor,
         )
         cached = " cached" if result.cached else ""
         complexity = f" complexity={result.complexity}" if result.complexity else ""

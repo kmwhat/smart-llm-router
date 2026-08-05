@@ -13,6 +13,8 @@
     "max_baseline_case_regression": 0.2,
     "max_candidate_cost_usd": 0.000001,
     "max_call_cost_usd": 0.01,
+    "max_output_tokens": 2048,
+    "request_timeout_s": 90,
     "min_health_samples": 3,
     "baseline_required": true,
     "independent_review_required": true,
