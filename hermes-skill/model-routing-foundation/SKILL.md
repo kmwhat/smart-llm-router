@@ -12,20 +12,22 @@ Hermes 必须把全局 Smart LLM Router 视为模型能力入口。任何 agent�
 - Launcher: `smart-llm-router`
 - Project: `/path/to/smart-llm-router`
 - Runtime: `SMART_LLM_RUNTIME_DIR` or the standard user state directory
+- Paid workflow budget authority: `$HOME/.smart-llm-router/budget-authority`, independent of runtime isolation
+- Legacy v1 workflow budgets are conservatively imported before paid reservation; conflicts fail closed with a migration receipt
 - Credential catalog: optional `SMART_LLM_CREDENTIAL_CATALOG`
 
 ## 强制规则
 
-1. 先判断任务角色、输入模态、隐私、风险、质量档位和预算。
-2. 低风险批量任务先本地预处理、缓存和健康免费池；五个角色任务把 `draft=2`、`production=3`、`audit=4`、`frontier=4` 作为最低质量档。达标后按退化状态、预算资格、免费、重试后预计成本、成功调用 P95、质量余量、角色顺序和 Provider 优先级排序；无达标路线时失败关闭，不回退未登记通用模型。
-3. `plan`、`execute`、`audit`、`verify`、`quality_enhance` 必须分开，不用一个模型包办所有阶段。
-4. 每阶段只选择一个主模型；同模型换 API Key 只是容灾。规划审核必须独立于规划，最终复验必须独立于执行，不强制五阶段使用五家厂商。
+1. 先判断 `simple`、`standard`、`complex` 难度档，再判断任务角色、输入模态、隐私、风险、质量档位和预算。
+2. `simple` 任务使用最小充分链路；`standard` 增加强规划和独立审计；`complex` 使用 Sol 设计、带来源研究包、Qwen-Max 增强、DeepSeek 挑战审计、廉价差异整改、原审计模型增量复验、廉价执行和最终成果闭环。
+3. 角色任务把 `draft=2`、`production=3`、`audit=4`、`frontier=4` 作为最低质量档；无达标路线时失败关闭，不回退未登记通用模型。
+4. Codex 订阅模型只能作为工作区控制器声明，Hermes 和路由器都不得冒充通过供应商 API 调用了订阅模型。
 5. 私人图片、聊天记录、身份信息和私有音视频默认 `local_only`，不得绕过隐私门。
-6. 有预算时使用 `--max-cost-usd`；未知价格的付费模型失败关闭。
+6. 每次付费调用使用 `--max-cost-usd`；v2 工作流的软目标只告警，弹性上限内自动继续，异常硬上限失败关闭；未知价格仍失败关闭。
 7. 子 agent 任务说明必须包含 `selected_route`、`fallback_route`、`quality_target`、`privacy` 和 `max_cost_usd`。
-8. 非平凡生产任务必须先生成 `workflow-plan`：冻结目标和验收标准，规划审查通过后才能执行；范围变化必须进入 `workflow-check`。
-9. `workflow-check` 返回 `verify_required` 或 `stop` 时不得自行忽略。最终交付只有在原始目标对齐且全部验收项为 `pass` 时才能完成。
-10. 五角色是治理阶段，不是每个任务都调用五个模型；过程检查默认本地执行，只有漂移信号才花费独立复验模型。
+8. 非平凡生产任务必须先生成 `workflow-plan`：冻结目标和验收标准；研究增强必须有来源URL和引用日期；规划审查通过后才能执行。
+9. `workflow-check` 返回 `redesign_required`、`repair_required`、`authorization_required`、`verify_required` 或 `stop` 时不得自行忽略。
+10. 过程检查默认本地执行；局部缺陷只允许有界整改，目标或架构根本失效返回Sol，差异复验必须复用原审计模型。
 11. 公共模板默认按 Gemini Free Tier 使用；未显式设置 `SMART_LLM_GEMINI_PAID_ENABLED=true` 时不得进入付费池。免费层仅处理公开、非敏感资料。
 12. `quality_enhance` 是条件阶段，只有最终复验明确发现表达、清晰度或覆盖缺口时才调用。
 13. OpenRouter/Groq 免费候选目录默认每 6 小时按需刷新；发现失败保留上次清单，429/超时/端点错误进入持久冷却并自动换候选。
@@ -39,11 +41,12 @@ Hermes 必须把全局 Smart LLM Router 视为模型能力入口。任何 agent�
 
 ## 角色路线
 
-- 规划：Qwen 3.7 Max；Kimi K3、已验证的 Doubao Seed 2.x 备选。
-- 执行：GLM-5.2；DeepSeek V4 Pro、通过专用探针后的 Doubao Seed 2.0 Code 备选。
-- 审计：公开任务优先 Gemini 2.5 Pro Free Tier；DeepSeek V4 Pro、Qwen 3.7 Max 备选。
-- 复验：公开草稿可选已登记二档的 Groq GPT-OSS 120B；高风险任务优先选择未参与主执行的三/四档模型，不足时使用 DeepSeek V4 Pro 等独立家族。
-- 提质：Kimi K3；Qwen 3.7 Max、GLM-5.2 备选。
+- 工作区规划：Codex GPT-5.6 Sol；简单任务可用 Terra。
+- 研究增强：Qwen 3.7 Max；输出必须绑定来源证据。
+- 规划挑战审计：DeepSeek V4 Pro；Flash-0731 完成当前端点角色晋升门后方可优先。
+- 执行与整改：优先工作区原生Codex订阅执行器或最便宜合格外部/免费模型。
+- 最终审计：优先复用与执行家族独立的原DeepSeek审计身份；执行若使用DeepSeek则切换合格独立家族。
+- 增量复验：复用对应原审计模型，不重新全量审查。
 - 多模态支线：公开、非敏感输入可优先 Gemini 2.5 Pro Free Tier；Doubao Seed 2.0 Pro、Kimi 作为付费或独立复核候选。
 
 ## 调用

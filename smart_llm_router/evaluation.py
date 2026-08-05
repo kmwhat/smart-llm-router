@@ -130,6 +130,8 @@ def validate_golden_suite(payload: dict[str, Any]) -> dict[str, Any]:
         "max_baseline_case_regression": _ratio(raw_thresholds.get("max_baseline_case_regression"), name="max_baseline_case_regression", default=0.0),
         "max_candidate_cost_usd": float(raw_thresholds.get("max_candidate_cost_usd", 0.0)),
         "max_call_cost_usd": float(raw_thresholds.get("max_call_cost_usd", 0.02)),
+        "max_output_tokens": min(4096, max(64, int(raw_thresholds.get("max_output_tokens") or 1024))),
+        "request_timeout_s": min(180.0, max(5.0, float(raw_thresholds.get("request_timeout_s") or 30.0))),
         "min_health_samples": max(3, int(raw_thresholds.get("min_health_samples") or 3)),
         "baseline_required": bool(raw_thresholds.get("baseline_required", True)),
         "independent_review_required": bool(raw_thresholds.get("independent_review_required", proposed_role in ROLE_TASKS)),
@@ -277,6 +279,7 @@ def _resolve_route(settings: Settings, provider: str, model: str) -> dict[str, A
         "model_family": capability["model_family"],
         "free": matches[0].provider.free,
         "billing_class": capability["billing_class"],
+        "trial_quota_guarded": bool(capability.get("trial_quota_guarded")),
     }
 
 
@@ -292,6 +295,7 @@ def _run_route_cases(
     suite: dict[str, Any],
     route: dict[str, Any],
     allow_paid: bool,
+    allow_unprotected_trial: bool = False,
     stop_on_call_failure: bool = True,
 ) -> dict[str, Any]:
     if not route["free"] and not allow_paid:
@@ -331,7 +335,15 @@ def _run_route_cases(
                     quality_target=suite["quality_target"],
                     privacy=suite["privacy"],
                     max_cost_usd=suite["thresholds"]["max_call_cost_usd"],
+                    max_output_tokens=suite["thresholds"]["max_output_tokens"],
+                    request_timeout=suite["thresholds"]["request_timeout_s"],
                     temperature=0.0,
+                    # Golden evaluation is the gate that decides whether an
+                    # unregistered candidate may enter the role table. It must
+                    # be able to call that exact route without weakening normal
+                    # production role floors.
+                    allow_unqualified_explicit_route=True,
+                    allow_unprotected_trial_route=allow_unprotected_trial,
                 )
                 ledger = _ledger_row(settings, result.ledger_id) or {}
                 assertions = evaluate_assertions(result.content, case["assertions"])
@@ -453,6 +465,7 @@ def run_golden_evaluation(
     baseline_model: str | None = None,
     output_dir: str | Path | None = None,
     allow_paid: bool = False,
+    allow_unprotected_trial: bool = False,
 ) -> dict[str, Any]:
     suite_source = Path(suite_path).expanduser().resolve()
     suite = load_golden_suite(suite_source)
@@ -469,6 +482,20 @@ def run_golden_evaluation(
     if paid_routes and not allow_paid:
         names = ", ".join(f"{route['provider']}/{route['model']}" for route in paid_routes)
         raise ValueError(f"paid routes require --allow-paid: {names}")
+    unprotected_trial_routes = [
+        route
+        for route in (candidate_route, baseline_route)
+        if route
+        and route.get("billing_class") == "trial_quota"
+        and not route.get("trial_quota_guarded")
+    ]
+    if unprotected_trial_routes and not allow_unprotected_trial:
+        names = ", ".join(
+            f"{route['provider']}/{route['model']}" for route in unprotected_trial_routes
+        )
+        raise ValueError(
+            f"unprotected trial routes require --allow-unprotected-trial: {names}"
+        )
 
     created_at = _now().isoformat()
     report_id = "ger_" + _canonical_hash(
@@ -479,10 +506,22 @@ def run_golden_evaluation(
             "created_at": created_at,
         }
     )[:20]
-    candidate_result = _run_route_cases(settings, suite=suite, route=candidate_route, allow_paid=allow_paid)
+    candidate_result = _run_route_cases(
+        settings,
+        suite=suite,
+        route=candidate_route,
+        allow_paid=allow_paid,
+        allow_unprotected_trial=allow_unprotected_trial,
+    )
     baseline_entry_passed = _candidate_passes_baseline_entry(candidate_result, suite["thresholds"])
     baseline_result = (
-        _run_route_cases(settings, suite=suite, route=baseline_route, allow_paid=allow_paid)
+        _run_route_cases(
+            settings,
+            suite=suite,
+            route=baseline_route,
+            allow_paid=allow_paid,
+            allow_unprotected_trial=allow_unprotected_trial,
+        )
         if baseline_route and baseline_entry_passed
         else None
     )

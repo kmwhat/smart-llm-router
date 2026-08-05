@@ -22,7 +22,7 @@ class EvaluationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp())
         self.providers = (
-            LLMProvider("qwen-free", "https://qwen.test/v1", "QWEN_KEY", ("qwen-plus-latest",), True, 1, "trial_quota"),
+            LLMProvider("qwen-free", "https://qwen.test/v1", "QWEN_KEY", ("qwen-plus-latest",), True, 1, "trial_quota", True),
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 2, "paid"),
         )
         self.settings = Settings(
@@ -48,6 +48,7 @@ class EvaluationTests(unittest.TestCase):
                 "max_baseline_case_regression": 0.0,
                 "max_candidate_cost_usd": 0.001,
                 "max_call_cost_usd": 0.01,
+                "request_timeout_s": 45,
                 "min_health_samples": 3,
                 "baseline_required": True,
                 "independent_review_required": True,
@@ -75,6 +76,12 @@ class EvaluationTests(unittest.TestCase):
         suite["api_key"] = "must-not-live-here"
         with self.assertRaisesRegex(ValueError, "secret field"):
             validate_golden_suite(suite)
+
+    def test_suite_normalizes_bounded_request_timeout(self) -> None:
+        suite = self._suite()
+        self.assertEqual(validate_golden_suite(suite)["thresholds"]["request_timeout_s"], 45.0)
+        suite["thresholds"]["request_timeout_s"] = 999
+        self.assertEqual(validate_golden_suite(suite)["thresholds"]["request_timeout_s"], 180.0)
 
     def test_assertions_accept_fenced_json_and_required_keys(self) -> None:
         results = evaluate_assertions(

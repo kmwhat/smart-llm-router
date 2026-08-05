@@ -37,7 +37,7 @@ class CachePolicyTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_cache_key_separates_external_override_and_budget(self) -> None:
+    def test_cache_key_separates_external_override_budget_and_output_limit(self) -> None:
         common = {
             "task": "qa",
             "prompt": "只输出 OK",
@@ -50,11 +50,30 @@ class CachePolicyTests(unittest.TestCase):
         local_key = _cache_key(**common, allow_external=False)
         external_key = _cache_key(**common, allow_external=True)
         budget_key = _cache_key(**common, allow_external=False, max_cost_usd=0.01)
+        output_limit_key = _cache_key(**common, allow_external=False, max_output_tokens=256)
         with patch("smart_llm_router.router.CACHE_POLICY_VERSION", "cache-policy-v1"):
             legacy_policy_key = _cache_key(**common, allow_external=False)
         self.assertNotEqual(local_key, external_key)
         self.assertNotEqual(local_key, budget_key)
+        self.assertNotEqual(local_key, output_limit_key)
         self.assertNotEqual(local_key, legacy_policy_key)
+
+    def test_cache_key_isolates_deepseek_thinking_and_final_answer_policy(self) -> None:
+        common = {
+            "task": "audit",
+            "prompt": "return JSON",
+            "context": None,
+            "prefer_free": False,
+            "paid_fallback": True,
+            "temperature": 0.2,
+            "privacy": "external_allowed",
+            "provider": "deepseek-direct-paid",
+            "model": "deepseek-v4-pro",
+        }
+        default_key = _cache_key(**common)
+        disabled_key = _cache_key(**common, thinking_mode="disabled")
+        reserved_key = _cache_key(**common, final_answer_reserve_tokens=600)
+        self.assertEqual(len({default_key, disabled_key, reserved_key}), 3)
 
     def test_current_same_policy_cache_still_hits(self) -> None:
         provider = LLMProvider(
@@ -126,7 +145,7 @@ class CachePolicyTests(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
         self.assertEqual(ledger[0]["event"], "cache_policy_rejected")
         self.assertEqual(ledger[0]["policy_error"], "route_not_currently_configured")
-        self.assertEqual(next(iter(cache.values()))["cache_policy_version"], "cache-policy-v2")
+        self.assertEqual(next(iter(cache.values()))["cache_policy_version"], "cache-policy-v3")
         self.assertEqual(next(iter(cache.values()))["billing_class"], "local")
         self.assertEqual(next(iter(cache.values()))["privacy"], "external_allowed")
         self.assertFalse(next(iter(cache.values()))["allow_external"])

@@ -1,5 +1,29 @@
 # Public Release Readiness
 
+## 0.8.4 Guarded Budget and Strict Controls Candidate — 2026-08-05
+
+Status: publication remains gated by a protected pull request, successful CI,
+exact merged-main verification, and separate tag/release authorization.
+
+- Package metadata, runtime version, and changelog report `0.8.4` without
+  claiming that a matching public wheel already exists.
+- Governed structured-output calls fail closed on malformed, fenced,
+  truncated, or schema-invalid JSON and never cache rejected output.
+- Strict-control preflight and request-scoped no-cache handling occur before
+  route selection, budget reservation, cache mutation, or provider send.
+- Paid input-token forecasts apply deterministic conservative guards;
+  non-finite cost ceilings are rejected before settings or external effects.
+- Workflow budgets use one stable user-level authority and preserve
+  reservations and liability when settlement crosses a hard boundary.
+- The public launcher uses only explicit environment variables and portable
+  defaults; it does not search machine-specific credential-catalog paths.
+- Public source and documentation contain no credential values, local catalog
+  filenames, personal absolute paths, runtime ledgers, caches, or backups.
+- The complete source suite passes 226 tests, bytecode compilation,
+  diff-format validation, public-boundary checks, and Gitleaks.
+- Provider calls, paid calls, production role-table changes, and automatic
+  task-descriptor-v2 activation remain outside this candidate gate.
+
 ## 0.7.0 Free-Route and Local-Fallback Candidate — 2026-07-31
 
 Status: protected PR #15 and post-merge main CI complete; this snapshot is
