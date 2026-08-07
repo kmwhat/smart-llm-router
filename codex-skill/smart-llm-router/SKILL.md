@@ -162,6 +162,24 @@ Default behavior:
   or provider send. Use `--no-cache` for an explicit request-scoped no-read,
   no-write cache path; the supported environment control is
   `SMART_LLM_CACHE=false`, not `SMART_LLM_CACHE_ENABLED=false`.
+- For an OpenRouter call that requires an exact upstream or privacy policy, use
+  `--openrouter-upstream-provider <slug>` (repeatable),
+  `--openrouter-no-fallbacks`, `--openrouter-require-zdr`, and optionally
+  `--openrouter-deny-data-collection`. These controls fail closed before send
+  if no OpenRouter route remains. Governed JSON Schema requests are sent as
+  strict structured output with provider parameter support required, then
+  validated again locally. The local validator accepts only its documented,
+  dependency-free JSON Schema 2020-12 subset: types, const/enum, object/array/string
+  bounds, numeric bounds, properties/required/additionalProperties, items/uniqueItems,
+  and allOf/anyOf/oneOf/not. Unsupported keywords or dialects, depth/node overflow,
+  malformed schemas, non-finite JSON numbers, and duplicate object keys fail closed.
+  An OpenRouter 400/404/422/503 bypasses generic cooldown only when request controls
+  were applied and its structured error message explicitly identifies the matching
+  ZDR/data/provider/structured-output constraint; status alone never grants the bypass.
+  Ordinary model, credential, quota, timeout, and transport failures still enter cooldown.
+- Read `doctor.configuration.runtime_dir_source` before comparing health runs.
+  `temporary_fallback` means the current environment could not write the
+  persistent user-state directory; `status` then describes only that ledger.
 - Each call writes a local JSONL ledger row with model, estimated tokens, latency, cache/failure status, and estimated cost when pricing is configured.
 - `route-stats` derives per-task route health from that ledger. It requires at least three health samples before marking a route degraded and excludes clear local DNS/network infrastructure failures from the health denominator.
 - API success proves endpoint health, not answer quality. Never promote a discovered model into a production role from health history alone; require task probes, a task-specific golden set, and explicit quality-band registration.

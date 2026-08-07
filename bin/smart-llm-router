@@ -8,9 +8,15 @@ PERSISTENT_RUNTIME="$STATE_HOME/smart-llm-router"
 if [ -z "${SMART_LLM_RUNTIME_DIR:-}" ]; then
   if mkdir -p "$PERSISTENT_RUNTIME" 2>/dev/null && [ -w "$PERSISTENT_RUNTIME" ]; then
     export SMART_LLM_RUNTIME_DIR="$PERSISTENT_RUNTIME"
+    export SMART_LLM_RUNTIME_DIR_SOURCE="persistent_user_state"
   else
     export SMART_LLM_RUNTIME_DIR="${TMPDIR:-/tmp}/smart-llm-router-runtime"
+    export SMART_LLM_RUNTIME_DIR_SOURCE="temporary_fallback"
+    export SMART_LLM_RUNTIME_FALLBACK_REASON="persistent_runtime_unwritable"
+    export SMART_LLM_RUNTIME_EXPECTED_DIR="$PERSISTENT_RUNTIME"
   fi
+elif [ -z "${SMART_LLM_RUNTIME_DIR_SOURCE:-}" ]; then
+  export SMART_LLM_RUNTIME_DIR_SOURCE="explicit_environment"
 fi
 
 PYTHON_BIN=${SMART_LLM_PYTHON:-"$PROJECT_ROOT/.venv/bin/python"}

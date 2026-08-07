@@ -48,6 +48,9 @@ class GovernedControlPreflightTests(unittest.TestCase):
             "SMART_LLM_CACHE": "false",
             "SMART_LLM2_TRIAL_QUOTA_GUARDED": "true",
             "SMART_LLM_PRICE_SYNTHETIC_PAID_INPUT": "0.1",
+            "SMART_LLM_RUNTIME_DIR_SOURCE": "temporary_fallback",
+            "SMART_LLM_RUNTIME_EXPECTED_DIR": "/synthetic/persistent",
+            "SMART_LLM_RUNTIME_FALLBACK_REASON": "persistent_runtime_unwritable",
             "SMART_LLM_TASK_ORDER_QA": "synthetic-free",
         }
         self.assertEqual(validate_governed_controls(controls), tuple(sorted(controls)))

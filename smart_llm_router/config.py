@@ -40,6 +40,9 @@ class Settings:
     configuration_warnings: tuple[str, ...] = ()
     budget_authority_dir: Path = field(default_factory=default_budget_authority_dir)
     legacy_budget_dirs: tuple[Path, ...] = ()
+    runtime_dir_source: str = "direct_config"
+    runtime_fallback_reason: str | None = None
+    runtime_expected_dir: Path | None = None
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -230,6 +233,18 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
         or os.getenv("SMART_LLM_DATA_DIR")
         or str(default_dir)
     ).expanduser()
+    runtime_dir_source = os.getenv("SMART_LLM_RUNTIME_DIR_SOURCE", "").strip()
+    if not runtime_dir_source:
+        runtime_dir_source = (
+            "runtime_environment"
+            if os.getenv("SMART_LLM_RUNTIME_DIR")
+            else "legacy_data_environment"
+            if os.getenv("SMART_LLM_DATA_DIR")
+            else "default_home"
+        )
+    runtime_fallback_reason = os.getenv("SMART_LLM_RUNTIME_FALLBACK_REASON", "").strip() or None
+    runtime_expected_raw = os.getenv("SMART_LLM_RUNTIME_EXPECTED_DIR", "").strip()
+    runtime_expected_dir = Path(runtime_expected_raw).expanduser() if runtime_expected_raw else None
     # Paid workflow budgets must not follow SMART_LLM_RUNTIME_DIR. That runtime
     # may be isolated for cooldown/cache testing, while the authority remains a
     # single durable user-level source of truth.
@@ -266,4 +281,7 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
         configuration_warnings=tuple(configuration_warnings),
         budget_authority_dir=budget_authority_dir,
         legacy_budget_dirs=legacy_budget_dirs,
+        runtime_dir_source=runtime_dir_source,
+        runtime_fallback_reason=runtime_fallback_reason,
+        runtime_expected_dir=runtime_expected_dir,
     )
