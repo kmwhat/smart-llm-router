@@ -118,6 +118,37 @@ class HealthSemanticsTests(unittest.TestCase):
         self.assertTrue(expired["routing_eligible"])
         self.assertFalse(expired["available_now"])
 
+    def test_success_in_same_runtime_clears_cooldown_and_refreshes_health(self) -> None:
+        provider = LLMProvider(
+            "openrouter-vision-free",
+            "https://example.test/v1",
+            "OPENROUTER_KEY",
+            ("example/model:free",),
+            True,
+            1,
+            "permanent_free",
+        )
+        choice = LLMChoice(provider, provider.models[0])
+        failure_at = datetime(2026, 8, 7, 1, tzinfo=timezone.utc)
+        success_at = failure_at + timedelta(minutes=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = self._settings(tmp, (provider,))
+            with patch.dict(os.environ, {"OPENROUTER_KEY": "test"}, clear=False):
+                states = _load_route_state(settings)
+                with patch("smart_llm_router.router._now", return_value=failure_at):
+                    _record_failure(settings, choice, states, RuntimeError("synthetic timeout"))
+                with patch("smart_llm_router.router._now", return_value=success_at):
+                    _record_success(settings, choice, states)
+                    row = route_status(settings)[0]
+
+            persisted_states = _load_route_state(settings)
+
+        self.assertEqual(persisted_states, {})
+        self.assertEqual(row["health_status"], "healthy")
+        self.assertEqual(row["health_evidence"], "recent_success")
+        self.assertEqual(row["failure_count"], 0)
+        self.assertIsNone(row["unavailable_until"])
+
     def test_health_semantics_do_not_promote_local_above_remote(self) -> None:
         remote = LLMProvider(
             "qwen-free",

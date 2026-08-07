@@ -1,5 +1,27 @@
 # Public Release Readiness
 
+## 0.9.0rc1 OpenRouter Policy and Structured Output Candidate — 2026-08-07
+
+Status: clean canonical candidate commit and local validation are required before
+protected pull request, CI, tag, publication, registry acceptance, or runtime projection.
+
+- Package metadata, runtime version, README, changelog, and CLI report `0.9.0rc1`
+  without claiming a public wheel, tag, or GitHub Release.
+- OpenRouter requests can pin one or more upstream provider slugs, disable provider
+  fallback, require Zero Data Retention, and deny data collection per request.
+- Governed JSON Schema requests use strict upstream structured-output controls and
+  retain a bounded, dependency-free local validation boundary.
+- Unsupported schemas, non-finite JSON, duplicate keys, malformed structured output,
+  and non-OpenRouter routes with OpenRouter-only controls fail closed before consumption.
+- A policy-specific provider failure avoids generic route cooldown only when its
+  sanitized structured error explicitly identifies an applied request constraint.
+- Portable-launcher diagnostics expose persistent, explicit, or temporary-fallback
+  runtime provenance so separate ledgers are not confused.
+- Tests and evidence use synthetic inputs only; no private source material, credential,
+  provider response, or domain-specific OCR content is included in this candidate.
+- Provider calls, paid fallback, tag creation, publication, accepted-registry changes,
+  OCR adapter consumption, and Codex/Hermes runtime projection remain outside this gate.
+
 ## 0.8.4 Guarded Budget and Strict Controls Candidate — 2026-08-05
 
 Status: publication remains gated by a protected pull request, successful CI,

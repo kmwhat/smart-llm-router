@@ -297,6 +297,10 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("--final-answer-reserve-tokens", type=int, help="为最终正文单独预留的 token")
     task.add_argument("--no-think", action="store_true", help="等价于 --thinking-mode disabled；也支持 prompt 中的 /no_think")
     task.add_argument("--strict-controls", action="store_true", help="治理调用在路由、预留和发送前严格校验 SMART_LLM 控制变量")
+    task.add_argument("--openrouter-upstream-provider", action="append", default=[], help="按 OpenRouter provider slug 限定上游承载方；可重复")
+    task.add_argument("--openrouter-no-fallbacks", action="store_true", help="禁止 OpenRouter 在上游 provider 之间隐式回退")
+    task.add_argument("--openrouter-require-zdr", action="store_true", help="要求 OpenRouter 仅路由到零数据保留 endpoint")
+    task.add_argument("--openrouter-deny-data-collection", action="store_true", help="要求 OpenRouter 排除会收集/训练输入的 provider")
     task.add_argument("--no-cache", action="store_true", help="显式禁用本次请求的响应缓存读取与写入")
     task.add_argument("--workflow-id", help="跨调用累计预算的工作流 ID")
     task.add_argument("--workflow-max-cost-usd", type=float, help="工作流累计成本硬上限")
@@ -585,6 +589,10 @@ def main() -> None:
             strict_controls=args.strict_controls,
             cache_enabled=False if args.no_cache else None,
             input_token_guard_factor=args.input_token_guard_factor,
+            openrouter_upstream_providers=args.openrouter_upstream_provider,
+            openrouter_allow_fallbacks=not args.openrouter_no_fallbacks,
+            openrouter_require_zdr=args.openrouter_require_zdr,
+            openrouter_deny_data_collection=args.openrouter_deny_data_collection,
         )
         cached = " cached" if result.cached else ""
         complexity = f" complexity={result.complexity}" if result.complexity else ""

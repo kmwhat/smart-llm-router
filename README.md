@@ -3,7 +3,11 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.8.4 release candidate adds conservative paid input-token forecast guarding and auditable budget evidence while preserving governed strict-control preflight,
+The 0.9.0rc1 release candidate adds request-scoped OpenRouter upstream controls,
+fail-closed Zero Data Retention and data-collection policy enforcement, strict
+structured-output transport plus bounded local validation, and explicit runtime
+provenance. It preserves the 0.8.4 conservative paid input-token forecast guarding
+and auditable budget evidence together with governed strict-control preflight,
 explicit request-scoped no-cache behavior, and sanitized cache-state evidence on
 top of the 0.8.2 DeepSeek thinking-mode control, fail-closed final-answer
 reservation, and cache isolation, the 0.8.1 Qwen and budget reconciliation
@@ -74,6 +78,9 @@ $HOME/.local/state/smart-llm-router
 预算由 `$HOME/.smart-llm-router/budget-authority` 统一管理，并以稳定的
 `budget_authority_id` 写入 doctor、预算状态与调用账本。因而为测试设置新的
 `SMART_LLM_RUNTIME_DIR` 不会获得一份新的工作流预算。
+当当前执行环境不能写入持久运行目录时，便携启动器会退到临时目录；`doctor`
+会明确显示 `runtime_dir_source=temporary_fallback`、预期持久目录和原因。此时的
+`status` 只代表该临时运行态，不能拿来否定另一个运行态中的成功健康证据。
 首次使用旧 workflow 时，路由器会从标准旧运行目录保守导入 v1 状态。
 导入完整保留停表状态、硬上限、累计支出、活动预留、事故和旧时间戳；
 若固定 authority 已有无法匹配的状态，或多个旧来源内容不一致，则在任何付费请求前
@@ -117,8 +124,8 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.8.4` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
-`0.8.4` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
+`0.9.0rc1` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
+`0.9.0rc1` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
 
 ```bash
 python3 -m venv .venv
@@ -179,7 +186,30 @@ NVIDIA 的发现命令只读取公共目录；Groq 发现使用认证目录；�
 `plan`、`research_enhance`、`plan_audit`、`execute`、`audit`、`verify`、`quality_enhance` 仍保持角色质量档。
 删除该变量或设为 `false` 即回退，隐私、生命周期、健康、预算和 `quality_target` 门不变。
 当任务明确要求严格 JSON 时，响应必须可被本地 JSON 解析器直接读取；Markdown 围栏等不合格输出不会缓存或返回，
-路由器会尝试下一条合格路线，全部不合格则失败关闭。
+并立即失败关闭，不会把同一治理判断交给下一条路线重新解释。带 JSON Schema 的
+OpenRouter 调用会同时发送 `response_format=json_schema`、`strict=true` 和
+`require_parameters=true`，返回后仍执行本地递归 schema 校验。
+
+需要锁定 OpenRouter 实际承载策略时，使用请求级控制，不在公共配置中硬编码临时 endpoint：
+
+```bash
+smart-llm-router task "Only raw JSON. JSON Schema: {...}" \
+  --task ocr --free-only --provider openrouter-vision-free \
+  --openrouter-upstream-provider provider-slug --openrouter-no-fallbacks \
+  --openrouter-require-zdr --openrouter-deny-data-collection --no-cache
+```
+
+`--openrouter-upstream-provider` 接受 OpenRouter 公布的 provider slug，可重复；
+`--openrouter-no-fallbacks` 禁止隐式切换承载方；ZDR 和 data-collection 控制分别
+映射到 OpenRouter 的每请求 `provider.zdr=true` 与 `data_collection=deny`。
+这些开关只约束 OpenRouter，若路由过滤后没有 OpenRouter 候选，会在网络发送前失败关闭。
+只有同时存在请求级约束、且 OpenRouter 结构化错误正文明确命中 ZDR、数据策略、provider 选择或
+结构化输出约束时，该 400/404/422/503 才作为策略不兼容记账而不污染普通 provider/model 冷却。
+单凭状态码不会获得豁免；认证、配额、传输、超时和模型不存在仍会冷却。
+本地二次校验只接受有界、依赖无关的 JSON Schema 2020-12 子集：`type/const/enum`、
+`properties/required/additionalProperties`、对象/数组/字符串数量边界、`items/uniqueItems`、
+数值边界以及 `allOf/anyOf/oneOf/not`。未知验证关键字、其他方言、超出深度/节点上限、
+非有限 JSON 数字和重复对象键都会在发送前或消费前失败关闭。
 
 治理外部调用可使用 `task --strict-controls`，它会在路由、付费预留和 provider
 发送前校验所有 `SMART_LLM` 控制名。未注册或误拼的近似名（例如

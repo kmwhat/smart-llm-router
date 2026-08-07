@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.0rc1 - 2026-08-07
+
+- Added request-scoped OpenRouter upstream provider allowlists, provider-fallback denial,
+  Zero Data Retention enforcement, and data-collection denial. These controls fail closed
+  before send when the selected route is not OpenRouter and participate in cache identity.
+- Forward schema-driven governed outputs as OpenRouter `response_format=json_schema` with
+  strict mode and `require_parameters=true`, while retaining local recursive schema validation.
+- Exposed portable-launcher runtime provenance and temporary fallback reason in `doctor`
+  so a sandbox-local status view cannot be mistaken for the persistent health ledger.
+- Made the bounded JSON Schema validator fail closed on unsupported schemas,
+  non-finite JSON, duplicate keys, numeric bounds, and nested required rules.
+- Request-policy-specific OpenRouter failures no longer poison generic route
+  cooldown only when the sanitized structured error explicitly matches an applied
+  request constraint; status codes alone cannot hide ordinary health failures.
+- Bounded schema validation now also enforces JSON numeric equality, the declared
+  2020-12 dialect, and schema depth/node ceilings.
+
 ## 0.8.4 - 2026-08-04
 
 - Governed audit/verify, JSON-only, and schema-driven calls require one complete raw JSON object and fail closed on truncation, fences, parse errors, or missing required fields.

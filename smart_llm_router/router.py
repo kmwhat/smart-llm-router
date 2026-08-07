@@ -572,6 +572,17 @@ class GovernedInvalidOutput(RuntimeError):
     """A billed response failed the governed output contract and must not fall back."""
 
 
+class RequestPolicyIncompatibility(RuntimeError):
+    """The endpoint rejected request-scoped controls, not the generic route."""
+
+    def __init__(self, status_code: int, reason: str = "request_constraints") -> None:
+        super().__init__(
+            f"OpenRouter request policy incompatible ({reason}, HTTP {status_code})"
+        )
+        self.status_code = status_code
+        self.reason = reason
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1847,6 +1858,8 @@ def router_doctor(
         recommendations.append("qualify_free_role_candidates_or_explicitly_allow_budgeted_paid_routes")
     if not all_choices:
         recommendations.append("configure_at_least_one_provider")
+    if settings.runtime_fallback_reason:
+        recommendations.append("run_status_in_the_same_runtime_or_set_SMART_LLM_RUNTIME_DIR")
 
     catalog = settings.credential_catalog
     return {
@@ -1869,6 +1882,10 @@ def router_doctor(
             "credential_catalog_providers": list(catalog.providers) if catalog else [],
             "credential_counts": dict(catalog.key_counts) if catalog else {},
             "runtime_dir": str(settings.data_dir),
+            "runtime_dir_source": settings.runtime_dir_source,
+            "runtime_fallback_active": bool(settings.runtime_fallback_reason),
+            "runtime_fallback_reason": settings.runtime_fallback_reason,
+            "runtime_expected_dir": str(settings.runtime_expected_dir) if settings.runtime_expected_dir else None,
             "budget_authority_dir": str(settings.budget_authority_dir),
             "budget_authority_id": budget_authority_id(settings.budget_authority_dir),
             "budget_authority_runtime_independent": settings.budget_authority_dir != settings.data_dir,
@@ -2282,6 +2299,49 @@ def _cache_enabled() -> bool:
 
 CACHE_POLICY_VERSION = "cache-policy-v3"
 
+JSON_SCHEMA_SUBSET_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$comment",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "type",
+        "const",
+        "enum",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "properties",
+        "required",
+        "additionalProperties",
+        "minProperties",
+        "maxProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+    }
+)
+JSON_SCHEMA_SUBSET_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
+JSON_SCHEMA_SUBSET_MAX_DEPTH = 16
+JSON_SCHEMA_SUBSET_MAX_NODES = 256
+JSON_SCHEMA_SUBSET_DIALECT = "https://json-schema.org/draft/2020-12/schema"
+
 
 def _cache_key(
     *,
@@ -2306,6 +2366,10 @@ def _cache_key(
     complexity_label: str = "",
     complexity_source: str = "legacy",
     complexity_version: str = "",
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
 ) -> str:
     payload = {
         "cache_policy_version": CACHE_POLICY_VERSION,
@@ -2330,6 +2394,14 @@ def _cache_key(
         "complexity_label": complexity_label,
         "complexity_source": complexity_source,
         "complexity_version": complexity_version,
+        "openrouter_upstream_providers": sorted(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        ),
+        "openrouter_allow_fallbacks": openrouter_allow_fallbacks,
+        "openrouter_require_zdr": openrouter_require_zdr,
+        "openrouter_deny_data_collection": openrouter_deny_data_collection,
     }
     return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -2338,6 +2410,200 @@ def _text_fingerprint(text: str | None) -> str:
     if not text:
         return ""
     return sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _reject_nonfinite_json_constant(value: str) -> Any:
+    raise ValueError(f"nonfinite_json_constant:{value}")
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate_json_object_key:{key}")
+        result[key] = value
+    return result
+
+
+def _strict_json_loads(text: str) -> Any:
+    return json.loads(
+        text,
+        parse_constant=_reject_nonfinite_json_constant,
+        object_pairs_hook=_reject_duplicate_json_pairs,
+    )
+
+
+def _json_value_equality_key(value: Any) -> tuple[Any, ...] | None:
+    """Return a hashable JSON Schema equality key; JSON numbers compare by value."""
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, int):
+        return ("number", Decimal(value))
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return ("number", Decimal(str(value)))
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        children = [_json_value_equality_key(item) for item in value]
+        if any(child is None for child in children):
+            return None
+        return ("array", *children)
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            return None
+        children = [
+            (key, _json_value_equality_key(child))
+            for key, child in sorted(value.items())
+        ]
+        if any(child is None for _, child in children):
+            return None
+        return ("object", *children)
+    return None
+
+
+def _json_value_fingerprint(value: Any) -> tuple[Any, ...] | None:
+    return _json_value_equality_key(value)
+
+
+def _json_schema_subset_error(
+    schema: Any,
+    *,
+    path: str = "$",
+    depth: int = 0,
+    nodes: list[int] | None = None,
+) -> str | None:
+    """Validate the bounded, dependency-free JSON Schema subset before use."""
+    if not isinstance(schema, dict):
+        return f"{path}:schema_must_be_object"
+    if depth > JSON_SCHEMA_SUBSET_MAX_DEPTH:
+        return f"{path}:schema_depth_exceeded"
+    if nodes is None:
+        nodes = [0]
+    nodes[0] += 1
+    if nodes[0] > JSON_SCHEMA_SUBSET_MAX_NODES:
+        return f"{path}:schema_node_limit_exceeded"
+    if any(not isinstance(keyword, str) for keyword in schema):
+        return f"{path}:schema_keyword_must_be_string"
+    unknown = sorted(set(schema) - JSON_SCHEMA_SUBSET_KEYWORDS)
+    if unknown:
+        return f"{path}:unsupported_keyword:{unknown[0]}"
+
+    for keyword in ("$schema", "$id", "$comment", "title", "description"):
+        if keyword in schema and not isinstance(schema[keyword], str):
+            return f"{path}:{keyword}_must_be_string"
+    dialect = schema.get("$schema")
+    if isinstance(dialect, str) and dialect.rstrip("#") != JSON_SCHEMA_SUBSET_DIALECT:
+        return f"{path}:unsupported_schema_dialect"
+    for keyword in ("deprecated", "readOnly", "writeOnly"):
+        if keyword in schema and not isinstance(schema[keyword], bool):
+            return f"{path}:{keyword}_must_be_boolean"
+    if "default" in schema and _json_value_fingerprint(schema["default"]) is None:
+        return f"{path}:default_must_be_finite_json"
+    if "examples" in schema:
+        examples = schema["examples"]
+        if not isinstance(examples, list) or any(_json_value_fingerprint(item) is None for item in examples):
+            return f"{path}:examples_must_be_finite_json_array"
+
+    expected_type = schema.get("type")
+    if isinstance(expected_type, str):
+        if expected_type not in JSON_SCHEMA_SUBSET_TYPES:
+            return f"{path}:unsupported_type:{expected_type}"
+    elif isinstance(expected_type, list):
+        if (
+            not expected_type
+            or any(not isinstance(item, str) or item not in JSON_SCHEMA_SUBSET_TYPES for item in expected_type)
+            or len(set(expected_type)) != len(expected_type)
+        ):
+            return f"{path}:type_array_invalid"
+    elif expected_type is not None:
+        return f"{path}:type_must_be_string_or_array"
+
+    if "const" in schema and _json_value_fingerprint(schema["const"]) is None:
+        return f"{path}:const_must_be_finite_json"
+    if "enum" in schema:
+        enum = schema["enum"]
+        fingerprints = [_json_value_fingerprint(item) for item in enum] if isinstance(enum, list) else []
+        if not isinstance(enum, list) or not enum or any(item is None for item in fingerprints):
+            return f"{path}:enum_must_be_nonempty_finite_json_array"
+        if len(set(fingerprints)) != len(fingerprints):
+            return f"{path}:enum_values_must_be_unique"
+
+    for keyword in ("minProperties", "maxProperties", "minItems", "maxItems", "minLength", "maxLength"):
+        value = schema.get(keyword)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            return f"{path}:{keyword}_must_be_nonnegative_integer"
+    for lower, upper in (
+        ("minProperties", "maxProperties"),
+        ("minItems", "maxItems"),
+        ("minLength", "maxLength"),
+    ):
+        if lower in schema and upper in schema and schema[lower] > schema[upper]:
+            return f"{path}:{lower}_exceeds_{upper}"
+    for keyword in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+        value = schema.get(keyword)
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+        ):
+            return f"{path}:{keyword}_must_be_finite_number"
+    if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+        return f"{path}:uniqueItems_must_be_boolean"
+    if "additionalProperties" in schema and not isinstance(schema["additionalProperties"], bool):
+        return f"{path}:additionalProperties_schema_not_supported"
+
+    required = schema.get("required")
+    if required is not None and (
+        not isinstance(required, list)
+        or any(not isinstance(item, str) for item in required)
+        or len(set(required)) != len(required)
+    ):
+        return f"{path}:required_must_be_unique_string_array"
+
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            return f"{path}:properties_must_be_object"
+        for field, child in properties.items():
+            if not isinstance(field, str):
+                return f"{path}:property_name_must_be_string"
+            error = _json_schema_subset_error(
+                child,
+                path=f"{path}.properties.{field}",
+                depth=depth + 1,
+                nodes=nodes,
+            )
+            if error:
+                return error
+    items = schema.get("items")
+    if items is not None:
+        error = _json_schema_subset_error(items, path=f"{path}.items", depth=depth + 1, nodes=nodes)
+        if error:
+            return error
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        children = schema.get(keyword)
+        if children is None:
+            continue
+        if not isinstance(children, list) or not children:
+            return f"{path}:{keyword}_must_be_nonempty_schema_array"
+        for index, child in enumerate(children):
+            error = _json_schema_subset_error(
+                child,
+                path=f"{path}.{keyword}[{index}]",
+                depth=depth + 1,
+                nodes=nodes,
+            )
+            if error:
+                return error
+    if "not" in schema:
+        error = _json_schema_subset_error(schema["not"], path=f"{path}.not", depth=depth + 1, nodes=nodes)
+        if error:
+            return error
+    return None
 
 
 def _required_structured_output_spec(
@@ -2365,19 +2631,28 @@ def _required_structured_output_spec(
     )
     schema: dict[str, Any] | None = None
     if schema_driven:
-        decoder = json.JSONDecoder()
+        decoder = json.JSONDecoder(
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
         marker = re.search(r"json\s*schema", combined, flags=re.IGNORECASE)
         search_start = marker.end() if marker else 0
         for match in re.finditer(r"\{", combined[search_start:]):
             try:
                 candidate, _ = decoder.raw_decode(combined[search_start + match.start() :])
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, ValueError):
                 continue
             if isinstance(candidate, dict) and any(
                 key in candidate for key in ("$schema", "type", "properties", "required")
             ):
                 schema = candidate
                 break
+    if schema_driven and schema is None:
+        raise ValueError("governed_json_schema_missing_or_invalid:blocked_before_send")
+    if schema is not None:
+        schema_error = _json_schema_subset_error(schema)
+        if schema_error:
+            raise ValueError(f"governed_json_schema_unsupported:{schema_error}:blocked_before_send")
     required_fields = [
         field
         for field in ((schema or {}).get("required") or [])
@@ -2422,8 +2697,8 @@ def _validate_structured_output(
             return False, "structured_output_truncated_at_output_cap"
         return False, "structured_output_not_one_complete_raw_json_object"
     try:
-        parsed = json.loads(stripped)
-    except (json.JSONDecodeError, TypeError):
+        parsed = _strict_json_loads(stripped)
+    except (json.JSONDecodeError, TypeError, ValueError):
         if output_reached_cap:
             return False, "structured_output_truncated_at_output_cap"
         return False, "strict_json_parse_failed"
@@ -2432,8 +2707,12 @@ def _validate_structured_output(
     missing = [field for field in (required_fields or ()) if field not in parsed]
     if missing:
         return False, "structured_output_missing_required_fields"
+    if schema is not None and _json_schema_subset_error(schema):
+        return False, "structured_output_schema_unsupported"
     if schema is not None and not _json_schema_required_fields_present(parsed, schema):
         return False, "structured_output_missing_required_fields"
+    if schema is not None and not _json_schema_value_matches(parsed, schema):
+        return False, "structured_output_schema_validation_failed"
     return True, None
 
 
@@ -2457,6 +2736,131 @@ def _json_schema_required_fields_present(value: Any, schema: Any) -> bool:
     return True
 
 
+def _json_schema_type_matches(value: Any, expected_type: str) -> bool:
+    return {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "number": isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value)),
+        "integer": (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+        )
+        or (
+            isinstance(value, float)
+            and math.isfinite(value)
+            and value.is_integer()
+        ),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }.get(expected_type, False)
+
+
+def _json_schema_value_matches(value: Any, schema: Any) -> bool:
+    """Validate the deterministic JSON Schema subset used by governed tasks."""
+    if not isinstance(schema, dict):
+        return False
+    value_fingerprint = _json_value_fingerprint(value)
+    if value_fingerprint is None:
+        return False
+    if "const" in schema and value_fingerprint != _json_value_fingerprint(schema["const"]):
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value_fingerprint not in {
+        _json_value_fingerprint(item) for item in enum
+    }:
+        return False
+    expected_type = schema.get("type")
+    if isinstance(expected_type, list):
+        if not any(_json_schema_type_matches(value, item) for item in expected_type):
+            return False
+    elif isinstance(expected_type, str):
+        if not _json_schema_type_matches(value, expected_type):
+            return False
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(_json_schema_value_matches(value, child) for child in all_of):
+        return False
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and not any(_json_schema_value_matches(value, child) for child in any_of):
+        return False
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list) and sum(_json_schema_value_matches(value, child) for child in one_of) != 1:
+        return False
+    not_schema = schema.get("not")
+    if isinstance(not_schema, dict) and _json_schema_value_matches(value, not_schema):
+        return False
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and any(field not in value for field in required):
+            return False
+        min_properties = schema.get("minProperties")
+        max_properties = schema.get("maxProperties")
+        if isinstance(min_properties, int) and len(value) < min_properties:
+            return False
+        if isinstance(max_properties, int) and len(value) > max_properties:
+            return False
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        if schema.get("additionalProperties") is False and any(key not in properties for key in value):
+            return False
+        for field, child_schema in properties.items():
+            if field in value and not _json_schema_value_matches(value[field], child_schema):
+                return False
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            return False
+        if isinstance(max_items, int) and len(value) > max_items:
+            return False
+        if schema.get("uniqueItems") is True:
+            item_fingerprints = [_json_value_fingerprint(item) for item in value]
+            if len(set(item_fingerprints)) != len(item_fingerprints):
+                return False
+        items = schema.get("items")
+        if isinstance(items, dict) and not all(_json_schema_value_matches(item, items) for item in value):
+            return False
+    if isinstance(value, str):
+        min_length = schema.get("minLength")
+        max_length = schema.get("maxLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            return False
+        if isinstance(max_length, int) and len(value) > max_length:
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)):
+            return False
+        if "minimum" in schema and value < schema["minimum"]:
+            return False
+        if "maximum" in schema and value > schema["maximum"]:
+            return False
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            return False
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            return False
+    return True
+
+
+def _structured_response_format(spec: dict[str, Any]) -> dict[str, Any] | None:
+    if spec.get("format") != "json":
+        return None
+    schema = spec.get("schema")
+    if isinstance(schema, dict):
+        schema_error = _json_schema_subset_error(schema)
+        if schema_error:
+            raise ValueError(f"governed_json_schema_unsupported:{schema_error}:blocked_before_send")
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "smart_llm_router_output",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+    return {"type": "json_object"}
+
+
 def _schema_required_field_count(schema: Any) -> int:
     if not isinstance(schema, dict):
         return 0
@@ -2478,6 +2882,34 @@ def _sanitized_completion_metadata(usage: dict[str, Any]) -> dict[str, Any]:
     return {
         "finish_reason": metadata.get("finish_reason"),
         "output_reached_requested_token_limit": bool(metadata.get("output_reached_requested_token_limit")),
+    }
+
+
+def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
+    metadata = usage.get("_routing_metadata")
+    if not isinstance(metadata, dict):
+        return {
+            "openrouter_controls_applied": False,
+            "requested_upstream_providers": [],
+            "provider_fallbacks_allowed": True,
+            "zdr_required": False,
+            "data_collection_denied": False,
+            "structured_response_requested": False,
+            "served_provider": None,
+            "generation_id": None,
+        }
+    upstream = metadata.get("requested_upstream_providers")
+    return {
+        "openrouter_controls_applied": bool(metadata.get("openrouter_controls_applied")),
+        "requested_upstream_providers": [
+            str(item) for item in upstream if isinstance(item, str)
+        ] if isinstance(upstream, list) else [],
+        "provider_fallbacks_allowed": bool(metadata.get("provider_fallbacks_allowed", True)),
+        "zdr_required": bool(metadata.get("zdr_required")),
+        "data_collection_denied": bool(metadata.get("data_collection_denied")),
+        "structured_response_requested": bool(metadata.get("structured_response_requested")),
+        "served_provider": metadata.get("served_provider") if isinstance(metadata.get("served_provider"), str) else None,
+        "generation_id": metadata.get("generation_id") if isinstance(metadata.get("generation_id"), str) else None,
     }
 
 
@@ -3953,6 +4385,99 @@ def _thinking_plan(
     }
 
 
+def _openrouter_request_policy_incompatibility_reason(
+    response: httpx.Response,
+    *,
+    is_openrouter: bool,
+    upstream_providers: tuple[str, ...],
+    allow_fallbacks: bool,
+    require_zdr: bool,
+    deny_data_collection: bool,
+    response_format: dict[str, Any] | None,
+) -> str | None:
+    """Classify only explicit request-constraint mismatches, never status alone."""
+    controls_requested = bool(
+        upstream_providers
+        or not allow_fallbacks
+        or require_zdr
+        or deny_data_collection
+        or response_format
+    )
+    if not is_openrouter or not controls_requested or response.status_code not in {400, 404, 422, 503}:
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    normalized = " ".join(message.lower().split())[:1024]
+    metadata = error.get("metadata") if isinstance(error.get("metadata"), dict) else {}
+    error_type = metadata.get("error_type") or payload.get("error_type")
+    if error_type in {
+        "authentication",
+        "permission_denied",
+        "payment_required",
+        "rate_limit_exceeded",
+        "provider_overloaded",
+        "provider_unavailable",
+        "server",
+        "timeout",
+    }:
+        return None
+
+    no_endpoint_signal = "no endpoint" in normalized
+    routing_requirement_signal = any(
+        marker in normalized
+        for marker in (
+            "routing requirement",
+            "guardrail restriction",
+            "provider restriction",
+            "provider selection",
+        )
+    )
+    if require_zdr and any(
+        marker in normalized
+        for marker in ("zero data retention", "zdr", "data policy")
+    ):
+        return "zdr_constraint"
+    if deny_data_collection and any(
+        marker in normalized
+        for marker in ("data collection", "data policy", "retain", "training")
+    ):
+        return "data_collection_constraint"
+    if response_format is not None and any(
+        marker in normalized
+        for marker in (
+            "structured output",
+            "structured response",
+            "json schema",
+            "json_schema",
+            "response_format",
+            "required parameter",
+            "parameter support",
+        )
+    ):
+        return "structured_output_constraint"
+    if (upstream_providers or not allow_fallbacks) and (
+        routing_requirement_signal
+        or (
+            no_endpoint_signal
+            and any(marker in normalized for marker in ("requested provider", "allowed provider"))
+        )
+    ):
+        return "provider_selection_constraint"
+    if routing_requirement_signal and no_endpoint_signal:
+        return "routing_requirement_constraint"
+    return None
+
+
 def _call_openai_compatible(
     choice: LLMChoice,
     *,
@@ -3963,6 +4488,11 @@ def _call_openai_compatible(
     enable_thinking: bool | None = None,
     thinking_budget_tokens: int | None = None,
     thinking: dict[str, str] | None = None,
+    response_format: dict[str, Any] | None = None,
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
@@ -3983,13 +4513,61 @@ def _call_openai_compatible(
     reasoning_effort = _local_ollama_reasoning_effort(choice)
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
+    is_openrouter = _provider_family(choice.provider) == "openrouter"
+    upstream_providers = tuple(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        )
+    )
+    openrouter_controls_requested = bool(
+        upstream_providers
+        or not openrouter_allow_fallbacks
+        or openrouter_require_zdr
+        or openrouter_deny_data_collection
+    )
+    if openrouter_controls_requested and not is_openrouter:
+        raise RuntimeError("OpenRouter 上游 provider/ZDR 控制只能用于 OpenRouter 路线。")
+    if response_format is not None and is_openrouter:
+        payload["response_format"] = response_format
+    provider_preferences: dict[str, Any] = {}
+    if upstream_providers:
+        provider_preferences["only"] = list(upstream_providers)
+    if not openrouter_allow_fallbacks:
+        provider_preferences["allow_fallbacks"] = False
+    if openrouter_require_zdr:
+        provider_preferences["zdr"] = True
+    if openrouter_deny_data_collection:
+        provider_preferences["data_collection"] = "deny"
+    if response_format is not None and is_openrouter:
+        provider_preferences["require_parameters"] = True
+    if provider_preferences:
+        payload["provider"] = provider_preferences
     with httpx.Client(timeout=timeout) as client:
         response = client.post(
             choice.provider.base_url.rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            policy_reason = _openrouter_request_policy_incompatibility_reason(
+                exc.response,
+                is_openrouter=is_openrouter,
+                upstream_providers=upstream_providers,
+                allow_fallbacks=openrouter_allow_fallbacks,
+                require_zdr=openrouter_require_zdr,
+                deny_data_collection=openrouter_deny_data_collection,
+                response_format=response_format,
+            )
+            if policy_reason:
+                raise RequestPolicyIncompatibility(
+                    int(exc.response.status_code),
+                    policy_reason,
+                ) from None
+            raise
         data = response.json()
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     usage = dict(usage)
@@ -4005,6 +4583,25 @@ def _call_openai_compatible(
     usage["_completion_metadata"] = {
         "finish_reason": finish_reason,
         "output_reached_requested_token_limit": bool(max_tokens is not None and completion_tokens >= max_tokens),
+    }
+    served_provider = data.get("provider")
+    if not isinstance(served_provider, str):
+        served_provider = None
+    try:
+        generation_id = response.headers.get("x-generation-id")
+    except (AttributeError, TypeError):
+        generation_id = None
+    if not isinstance(generation_id, str):
+        generation_id = None
+    usage["_routing_metadata"] = {
+        "openrouter_controls_applied": bool(is_openrouter and (provider_preferences or response_format)),
+        "requested_upstream_providers": list(upstream_providers),
+        "provider_fallbacks_allowed": openrouter_allow_fallbacks,
+        "zdr_required": openrouter_require_zdr,
+        "data_collection_denied": openrouter_deny_data_collection,
+        "structured_response_requested": response_format is not None and is_openrouter,
+        "served_provider": served_provider,
+        "generation_id": generation_id,
     }
     content = _visible_message_text(message.get("content"))
     if not content:
@@ -4823,6 +5420,10 @@ def run_llm_task(
     strict_controls: bool = False,
     cache_enabled: bool | None = None,
     input_token_guard_factor: float | None = None,
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
 ) -> LLMResult:
     control_preflight = build_control_preflight(
         strict_controls=strict_controls,
@@ -4862,6 +5463,26 @@ def run_llm_task(
         raise ValueError("工作流预算调用必须同时设置 max_cost_usd 单次硬上限")
     if request_timeout is not None and request_timeout <= 0:
         raise ValueError("request_timeout 必须为正数")
+    normalized_upstream_providers = tuple(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        )
+    )
+    invalid_upstream_providers = [
+        item
+        for item in normalized_upstream_providers
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", item)
+    ]
+    if invalid_upstream_providers:
+        raise ValueError("OpenRouter upstream provider 必须使用公开 provider slug。")
+    openrouter_controls_requested = bool(
+        normalized_upstream_providers
+        or not openrouter_allow_fallbacks
+        or openrouter_require_zdr
+        or openrouter_deny_data_collection
+    )
     if task in LOCAL_ONLY_TASKS:
         raise RuntimeError(f"任务 {task} 是本地专用流程；请使用 transcribe/asr-status 或 route-plan，而不是 chat 模型调用。")
     if task in {"embed", "rerank"}:
@@ -4933,6 +5554,10 @@ def run_llm_task(
         complexity_label=complexity["label"],
         complexity_source=complexity["complexity_source"],
         complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
+        openrouter_upstream_providers=normalized_upstream_providers,
+        openrouter_allow_fallbacks=openrouter_allow_fallbacks,
+        openrouter_require_zdr=openrouter_require_zdr,
+        openrouter_deny_data_collection=openrouter_deny_data_collection,
     )
     cache_debug = {
         "cache_key": cache_key[:16],
@@ -4958,6 +5583,13 @@ def run_llm_task(
         "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
         "preprocess": _preprocess_ledger_summary(preprocessing) if preprocessing else None,
         "control_preflight": control_preflight.evidence(),
+        "openrouter_request_controls": {
+            "requested": openrouter_controls_requested,
+            "upstream_providers": list(normalized_upstream_providers),
+            "provider_fallbacks_allowed": openrouter_allow_fallbacks,
+            "zdr_required": openrouter_require_zdr,
+            "data_collection_denied": openrouter_deny_data_collection,
+        },
     }
     base_cache_evidence = {
         "requested_cache_enabled": control_preflight.requested_cache_enabled,
@@ -4968,6 +5600,7 @@ def run_llm_task(
     }
     required_output_spec = _required_structured_output_spec(complexity, prompt, task=task, context=context)
     required_output_format = required_output_spec["format"]
+    response_format = _structured_response_format(required_output_spec)
     if effective_cache_enabled:
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
@@ -5167,6 +5800,10 @@ def run_llm_task(
         if not filtered:
             raise RuntimeError(f"没有匹配 provider/model 过滤条件的可用模型：provider={provider or '-'} model={model or '-'}")
         choices = filtered
+    if openrouter_controls_requested:
+        choices = [choice for choice in choices if _provider_family(choice.provider) == "openrouter"]
+        if not choices:
+            raise RuntimeError("请求了 OpenRouter 上游 provider/ZDR 控制，但没有匹配的 OpenRouter 路线；已在发送前失败关闭。")
     preferred_choices, avoided_choices = _split_avoided_choices(choices, avoid_routes)
     if preferred_choices:
         choices = preferred_choices + avoided_choices
@@ -5265,6 +5902,17 @@ def run_llm_task(
                 call_options["thinking_budget_tokens"] = thinking_plan["thinking_budget_tokens"]
             if thinking_plan.get("thinking") is not None:
                 call_options["thinking"] = thinking_plan["thinking"]
+            if response_format is not None:
+                call_options["response_format"] = response_format
+            if openrouter_controls_requested:
+                call_options.update(
+                    {
+                        "openrouter_upstream_providers": normalized_upstream_providers,
+                        "openrouter_allow_fallbacks": openrouter_allow_fallbacks,
+                        "openrouter_require_zdr": openrouter_require_zdr,
+                        "openrouter_deny_data_collection": openrouter_deny_data_collection,
+                    }
+                )
             content, usage = _call_openai_compatible(
                 choice,
                 messages=messages,
@@ -5275,6 +5923,7 @@ def run_llm_task(
             )
             output_tokens_est = int(usage.get("completion_tokens") or _estimate_tokens(content))
             completion_metadata = _sanitized_completion_metadata(usage)
+            routing_metadata = _sanitized_routing_metadata(usage)
             completion_metadata["output_reached_requested_token_limit"] = bool(
                 completion_metadata["output_reached_requested_token_limit"]
                 or (effective_output_limit is not None and output_tokens_est >= effective_output_limit)
@@ -5467,6 +6116,7 @@ def run_llm_task(
                     "budget_forecast": _budget_evidence_fields(budget),
                     "thinking_plan": thinking_plan,
                     "completion_metadata": completion_metadata,
+                    "routing_metadata": routing_metadata,
                     "workflow_id": workflow_id,
                     "workflow_stage": workflow_stage,
                     "workflow_max_cost_usd": workflow_max_cost_usd,
@@ -5664,8 +6314,14 @@ def run_llm_task(
                     f"{choice.provider.name}/{choice.model}: governed structured output invalid ({failure_output_error})"
                 ) from None
             errors.append(f"{choice.provider.name}/{choice.model}: {exc}")
-            _record_failure(settings, choice, states, exc)
-            failure_class = classify_route_failure(str(exc))
+            health_cooldown_recorded = not isinstance(exc, RequestPolicyIncompatibility)
+            if health_cooldown_recorded:
+                _record_failure(settings, choice, states, exc)
+            failure_class = (
+                "request_policy_incompatible"
+                if isinstance(exc, RequestPolicyIncompatibility)
+                else classify_route_failure(str(exc))
+            )
             _append_ledger(
                 settings,
                 {
@@ -5690,6 +6346,10 @@ def run_llm_task(
                     "workflow_stage": workflow_stage,
                     "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
                     "failure_class": failure_class,
+                    "health_cooldown_recorded": health_cooldown_recorded,
+                    "request_policy_reason": (
+                        exc.reason if isinstance(exc, RequestPolicyIncompatibility) else None
+                    ),
                     "error": str(exc).replace("\n", " ")[:240],
                 },
             )
