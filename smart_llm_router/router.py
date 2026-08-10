@@ -342,6 +342,14 @@ PENDING_ROLE_CANDIDATES: dict[str, dict[str, str]] = {
     },
 }
 
+# Provider catalogs may append a deployment revision to the upstream model ID.
+# Normalize only reviewed identities so pending-candidate metadata and request
+# adapters apply without granting a role-quality band.
+ROLE_MODEL_ALIASES: dict[str, str] = {
+    "deepseek-ai/deepseek-v4-flash-0731": "deepseek-v4-flash",
+    "deepseek-v4-flash-0731": "deepseek-v4-flash",
+}
+
 MULTIMODAL_UNDERSTANDING_ORDER = (
     "doubao-seed-2-0-pro-260215",
     "qwen3.7-plus",
@@ -1192,7 +1200,23 @@ def _role_model_aliases(choice: LLMChoice) -> tuple[str, ...]:
     without_free = re.sub(r":free$", "", raw)
     basename = without_free.rsplit("/", 1)[-1]
     aliases = [raw, without_free, basename]
+    aliases.extend(
+        ROLE_MODEL_ALIASES[alias]
+        for alias in tuple(aliases)
+        if alias in ROLE_MODEL_ALIASES
+    )
     return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _is_deepseek_v4_choice(choice: LLMChoice) -> bool:
+    return _model_family(choice) == "deepseek" and any(
+        alias in {"deepseek-v4-flash", "deepseek-v4-pro"}
+        for alias in _role_model_aliases(choice)
+    )
+
+
+def _is_nvidia_deepseek_v4_choice(choice: LLMChoice) -> bool:
+    return _provider_family(choice.provider) == "nvidia" and _is_deepseek_v4_choice(choice)
 
 
 def _role_model_rank(choice: LLMChoice, task: str) -> int:
@@ -2896,6 +2920,7 @@ def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
             "data_collection_denied": False,
             "structured_response_requested": False,
             "served_provider": None,
+            "served_model": None,
             "generation_id": None,
         }
     upstream = metadata.get("requested_upstream_providers")
@@ -2909,6 +2934,7 @@ def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
         "data_collection_denied": bool(metadata.get("data_collection_denied")),
         "structured_response_requested": bool(metadata.get("structured_response_requested")),
         "served_provider": metadata.get("served_provider") if isinstance(metadata.get("served_provider"), str) else None,
+        "served_model": metadata.get("served_model") if isinstance(metadata.get("served_model"), str) else None,
         "generation_id": metadata.get("generation_id") if isinstance(metadata.get("generation_id"), str) else None,
     }
 
@@ -4299,10 +4325,10 @@ def _thinking_plan(
         provider_family == "qwen"
         and model in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD
     )
-    is_deepseek_hybrid = provider_family == "deepseek" and model in {
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
-    }
+    is_deepseek_hybrid = (
+        provider_family in {"deepseek", "nvidia"}
+        and _is_deepseek_v4_choice(choice)
+    )
     if not is_qwen_hybrid and not is_deepseek_hybrid:
         return {
             "mode": "unsupported",
@@ -4508,7 +4534,13 @@ def _call_openai_compatible(
         payload["enable_thinking"] = enable_thinking
     if thinking_budget_tokens is not None:
         payload["thinking_budget"] = thinking_budget_tokens
-    if thinking is not None:
+    nvidia_deepseek_v4 = _is_nvidia_deepseek_v4_choice(choice)
+    if nvidia_deepseek_v4:
+        thinking_enabled = not thinking or thinking.get("type") != "disabled"
+        payload["chat_template_kwargs"] = {"thinking": thinking_enabled}
+        if thinking_enabled:
+            payload["chat_template_kwargs"]["reasoning_effort"] = "high"
+    elif thinking is not None:
         payload["thinking"] = thinking
     reasoning_effort = _local_ollama_reasoning_effort(choice)
     if reasoning_effort:
@@ -4569,6 +4601,20 @@ def _call_openai_compatible(
                 ) from None
             raise
         data = response.json()
+    raw_served_model = data.get("model")
+    served_model = raw_served_model.strip() if isinstance(raw_served_model, str) else None
+    served_model = served_model or None
+    if nvidia_deepseek_v4 and served_model:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", served_model):
+            raise RuntimeError(
+                f"{choice.provider.name}/{choice.model} "
+                "model_substitution_detected:invalid_served_model"
+            )
+        served_choice = LLMChoice(choice.provider, served_model)
+        if not set(_role_model_aliases(choice)).intersection(_role_model_aliases(served_choice)):
+            raise RuntimeError(
+                f"{choice.provider.name}/{choice.model} model_substitution_detected:{served_model}"
+            )
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     usage = dict(usage)
     first_choice = (data.get("choices") or [{}])[0]
@@ -4601,6 +4647,7 @@ def _call_openai_compatible(
         "data_collection_denied": openrouter_deny_data_collection,
         "structured_response_requested": response_format is not None and is_openrouter,
         "served_provider": served_provider,
+        "served_model": served_model,
         "generation_id": generation_id,
     }
     content = _visible_message_text(message.get("content"))

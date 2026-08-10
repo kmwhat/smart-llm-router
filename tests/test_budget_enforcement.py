@@ -21,6 +21,8 @@ from smart_llm_router.router import (
     _call_openai_compatible,
     _estimated_cost_usd,
     _guarded_input_token_evidence,
+    _sanitized_routing_metadata,
+    _thinking_plan,
     estimate_messages_tokens,
     run_llm_task,
 )
@@ -307,6 +309,145 @@ class BudgetEnforcementTests(unittest.TestCase):
         self.assertEqual(payload["max_tokens"], 1800)
         self.assertNotIn("enable_thinking", payload)
         self.assertNotIn("thinking_budget", payload)
+
+    def test_nvidia_deepseek_v4_uses_official_chat_template_kwargs(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-flash-0731",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        response = Mock()
+        response.json.return_value = {
+            "model": "deepseek-ai/deepseek-v4-flash",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+        }
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                _, usage = _call_openai_compatible(
+                    LLMChoice(provider, provider.models[0]),
+                    messages=[{"role": "user", "content": "test"}],
+                    timeout=2,
+                    temperature=0,
+                    max_tokens=1024,
+                )
+
+        payload = client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        self.assertEqual(
+            payload["chat_template_kwargs"],
+            {"thinking": True, "reasoning_effort": "high"},
+        )
+        self.assertNotIn("thinking", payload)
+        self.assertEqual(
+            usage["_routing_metadata"]["served_model"],
+            "deepseek-ai/deepseek-v4-flash",
+        )
+        self.assertEqual(
+            _sanitized_routing_metadata(usage)["served_model"],
+            "deepseek-ai/deepseek-v4-flash",
+        )
+
+    def test_nvidia_deepseek_v4_disabled_thinking_uses_template_flag(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-flash-0731",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        choice = LLMChoice(provider, provider.models[0])
+        plan = _thinking_plan(
+            choice,
+            task="qa",
+            total_output_tokens=64,
+            thinking_mode="disabled",
+            thinking_budget_tokens=None,
+            final_answer_reserve_tokens=None,
+        )
+        self.assertEqual(plan["thinking"], {"type": "disabled"})
+
+        response = Mock()
+        response.json.return_value = {
+            "model": provider.models[0],
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                _call_openai_compatible(
+                    choice,
+                    messages=[{"role": "user", "content": "test"}],
+                    timeout=2,
+                    temperature=0,
+                    thinking=plan["thinking"],
+                )
+
+        payload = client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        self.assertEqual(payload["chat_template_kwargs"], {"thinking": False})
+        self.assertNotIn("thinking", payload)
+
+    def test_nvidia_deepseek_v4_rejects_non_equivalent_served_model(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-flash-0731",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        response = Mock()
+        response.json.return_value = {
+            "model": "unrelated/model",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                with self.assertRaisesRegex(RuntimeError, "model_substitution_detected"):
+                    _call_openai_compatible(
+                        LLMChoice(provider, provider.models[0]),
+                        messages=[{"role": "user", "content": "test"}],
+                        timeout=2,
+                        temperature=0,
+                    )
+
+    def test_nvidia_deepseek_v4_rejects_invalid_served_model_metadata(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-flash-0731",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        response = Mock()
+        response.json.return_value = {
+            "model": "deepseek-ai/deepseek-v4-flash\nforged-log-line",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                with self.assertRaisesRegex(RuntimeError, "invalid_served_model"):
+                    _call_openai_compatible(
+                        LLMChoice(provider, provider.models[0]),
+                        messages=[{"role": "user", "content": "test"}],
+                        timeout=2,
+                        temperature=0,
+                    )
 
     def test_deepseek_final_answer_reserve_disables_unbounded_thinking(self) -> None:
         provider = LLMProvider(
