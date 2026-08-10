@@ -1,5 +1,26 @@
 # Public Release Readiness
 
+## 0.9.0rc2 NVIDIA DeepSeek V4 Adapter Candidate — 2026-08-10
+
+Status: clean local version candidate and full validation are required before
+protected pull request, CI, tag, publication, registry acceptance, or runtime
+projection.
+
+- Package metadata, runtime version, README, changelog, and CLI report
+  `0.9.0rc2` without claiming a public wheel, tag, or GitHub Release.
+- NVIDIA-hosted DeepSeek V4 uses the provider's official
+  `chat_template_kwargs` thinking controls; direct DeepSeek behavior is
+  unchanged.
+- Returned model metadata is bounded and validated; malformed or
+  non-equivalent model substitution fails closed.
+- The reviewed `deepseek-v4-flash-0731` aliases remain
+  `pending_role_golden_gate`, with no `audit` or `plan_audit` quality band.
+- The existing public `v0.9.0rc1` tag and prerelease remain immutable history;
+  this candidate may use only a new `v0.9.0rc2` tag after all later gates pass.
+- Provider calls, paid fallback, role-table changes, publication,
+  accepted-registry changes, OCR consumption, and Codex/Hermes runtime
+  projection remain outside this candidate gate.
+
 ## 0.9.0rc1 OpenRouter Policy and Structured Output Candidate — 2026-08-07
 
 Status: clean canonical candidate commit and local validation are required before
