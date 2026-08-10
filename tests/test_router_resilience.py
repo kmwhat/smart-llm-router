@@ -10,6 +10,7 @@ from smart_llm_router.router import (
     InconclusiveModelOutput,
     LLMChoice,
     _call_openai_compatible,
+    _role_quality_band,
     describe_choice_capability,
     refresh_model_pool,
     router_doctor,
@@ -182,6 +183,29 @@ class RouterResilienceTests(unittest.TestCase):
         plan = next(row for row in report["roles"] if row["role"] == "plan")
         excluded = next(row for row in plan["why_not"] if row["model"] == "deepseek-v4-flash")
         self.assertIn("pending_role_golden_gate", excluded["reasons"])
+
+    def test_nvidia_flash_revision_alias_is_pending_without_audit_band(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://integrate.api.nvidia.com/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-flash-0731",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        choice = LLMChoice(provider=provider, model=provider.models[0])
+
+        capability = describe_choice_capability(choice)
+
+        self.assertEqual(
+            capability["role_candidate_status"]["status"],
+            "pending_role_golden_gate",
+        )
+        self.assertIn("plan_audit", capability["role_fit"])
+        self.assertEqual(_role_quality_band(choice, "audit"), 0)
+        self.assertEqual(_role_quality_band(choice, "plan_audit"), 0)
 
 
 if __name__ == "__main__":
