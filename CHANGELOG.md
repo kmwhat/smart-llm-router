@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.0rc2 - 2026-08-10
+
+- Adapted NVIDIA-hosted DeepSeek V4 requests to the official
+  `chat_template_kwargs` thinking controls while preserving direct DeepSeek
+  request behavior.
+- Validated and recorded bounded served-model metadata, rejecting malformed or
+  non-equivalent model substitution before consuming the response.
+- Recognized the reviewed `deepseek-v4-flash-0731` deployment aliases without
+  granting an `audit` or `plan_audit` quality band; the route remains pending
+  its role-matched quality gates.
+
 ## 0.9.0rc1 - 2026-08-07
 
 - Added request-scoped OpenRouter upstream provider allowlists, provider-fallback denial,

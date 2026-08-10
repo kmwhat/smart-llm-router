@@ -3,10 +3,12 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.0rc1 release candidate adds request-scoped OpenRouter upstream controls,
-fail-closed Zero Data Retention and data-collection policy enforcement, strict
-structured-output transport plus bounded local validation, and explicit runtime
-provenance. It preserves the 0.8.4 conservative paid input-token forecast guarding
+The 0.9.0rc2 release candidate adds NVIDIA-hosted DeepSeek V4 request compatibility
+and served-model identity validation without promoting the model into audit roles.
+It retains the 0.9.0rc1 request-scoped OpenRouter upstream controls, fail-closed
+Zero Data Retention and data-collection policy enforcement, strict structured-output
+transport plus bounded local validation, and explicit runtime provenance. It
+preserves the 0.8.4 conservative paid input-token forecast guarding
 and auditable budget evidence together with governed strict-control preflight,
 explicit request-scoped no-cache behavior, and sanitized cache-state evidence on
 top of the 0.8.2 DeepSeek thinking-mode control, fail-closed final-answer
@@ -124,8 +126,8 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.0rc1` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
-`0.9.0rc1` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
+`0.9.0rc2` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
+`0.9.0rc2` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
 
 ```bash
 python3 -m venv .venv
