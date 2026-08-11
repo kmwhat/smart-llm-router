@@ -278,6 +278,75 @@ class BudgetEnforcementTests(unittest.TestCase):
         self.assertEqual(payload["max_completion_tokens"], 1200)
         self.assertNotIn("max_tokens", payload)
 
+    def test_minimax_uses_current_request_shape_and_conservative_price(self) -> None:
+        provider = LLMProvider(
+            "minimax-frontier-paid",
+            "https://api.minimaxi.com/v1",
+            "MINIMAX_KEY",
+            ("MiniMax-M3",),
+            False,
+            1,
+            "paid",
+        )
+        response = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 8},
+            "base_resp": {"status_code": 0, "status_msg": ""},
+        }
+        with patch.dict(os.environ, {"MINIMAX_KEY": "test", "SMART_LLM_CNY_PER_USD": "7.2"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                _call_openai_compatible(
+                    LLMChoice(provider, "MiniMax-M3"),
+                    messages=[{"role": "user", "content": "test"}],
+                    timeout=2,
+                    temperature=0,
+                    max_tokens=1200,
+                )
+            estimated = _estimated_cost_usd(
+                LLMChoice(provider, "MiniMax-M3"),
+                1_000_000,
+                1_000_000,
+            )
+            observed_canary_guard = _guarded_input_token_evidence(
+                LLMChoice(provider, "MiniMax-M3"),
+                48,
+            )
+        payload = client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        self.assertEqual(payload["max_completion_tokens"], 1200)
+        self.assertTrue(payload["reasoning_split"])
+        self.assertNotIn("max_tokens", payload)
+        self.assertEqual(estimated, 2.916666)
+        self.assertEqual(observed_canary_guard["guarded_input_tokens"], 213)
+        self.assertGreaterEqual(observed_canary_guard["guarded_input_tokens"], 199)
+        self.assertEqual(observed_canary_guard["guard_overhead_tokens"], 160)
+
+    def test_minimax_business_error_fails_closed_without_exposing_message(self) -> None:
+        provider = LLMProvider(
+            "minimax-frontier-paid",
+            "https://api.minimaxi.com/v1",
+            "MINIMAX_KEY",
+            ("MiniMax-M3",),
+            False,
+            1,
+            "paid",
+        )
+        response = Mock()
+        response.json.return_value = {
+            "base_resp": {"status_code": 1008, "status_msg": "private provider detail"},
+        }
+        with patch.dict(os.environ, {"MINIMAX_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                with self.assertRaisesRegex(RuntimeError, r"^minimax_api_error:1008$"):
+                    _call_openai_compatible(
+                        LLMChoice(provider, "MiniMax-M3"),
+                        messages=[{"role": "user", "content": "test"}],
+                        timeout=2,
+                        temperature=0,
+                    )
+
     def test_deepseek_disabled_thinking_uses_official_request_shape(self) -> None:
         provider = LLMProvider(
             "deepseek-direct-paid",

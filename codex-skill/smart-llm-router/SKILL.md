@@ -1,6 +1,6 @@
 ---
 name: smart-llm-router
-description: Use when a task should route across free, low-cost, and frontier LLMs by role, modality, privacy, quality, and budget. Supports planning, execution, audit, independent verification, quality enhancement, text, vision/OCR, ASR, embedding, rerank, and provider discovery across DeepSeek, Qwen, GLM, Kimi, Gemini, Doubao/Ark, OpenRouter, NVIDIA, and Groq.
+description: Use when a task should route across free, low-cost, and frontier LLMs by role, modality, privacy, quality, and budget. Supports planning, execution, audit, independent verification, quality enhancement, text, vision/OCR, ASR, embedding, rerank, and provider discovery across DeepSeek, Qwen, GLM, Kimi, MiniMax, Gemini, Doubao/Ark, OpenRouter, NVIDIA, and Groq.
 metadata:
   short-description: Cost-aware free-pool LLM routing
 ---
@@ -130,6 +130,7 @@ Default behavior:
 - For complex governed work, use Sol/OpenAI for workspace planning, Qwen-Max for sourced research enhancement, DeepSeek for independent plan challenge audit, the cheapest qualified execution route, and a final verifier independent from execution. Flash-0731 cannot replace V4-Pro until the current endpoint passes the matching role golden gate.
 - Treat same-model key rotation as availability failover only. Plan audit must differ from planning and research enhancement, final verification must differ from execution, and delta verification must reuse the corresponding original auditor.
 - Distinguish `permanent_free`, `trial_quota`, and `paid`; Qwen, NVIDIA, and Ark trial resources are not permanent-free promises.
+- Treat MiniMax China `MiniMax-M3` and `MiniMax-M2.7` as paid text routes. They require explicit paid authorization and a cost ceiling, and remain outside production role bands until matching golden gates pass.
 - Treat paid permission as an execution capability, not a ranking preference. A
   plan may list paid candidates, but `task` may execute them only with both
   `--paid` and `--max-cost-usd`. Programmatic callers must set
@@ -234,6 +235,9 @@ Valid billing classes are `local`, `permanent_free`, `trial_quota`, and `paid`.
 The portable launcher stores state under `SMART_LLM_RUNTIME_DIR` or the standard
 user state directory. An optional credential catalog is loaded only when
 `SMART_LLM_CREDENTIAL_CATALOG` is explicitly set.
+When that catalog has `付费模型`, `免费模型`, and `付费未充值模型`
+sections, only funded paid and free sections are admitted. The unfunded paid
+section is diagnostic-only and never populates executable key slots.
 Paid workflow budgets use the separate canonical authority at
 `$HOME/.smart-llm-router/budget-authority`; changing `SMART_LLM_RUNTIME_DIR`
 must never reset cumulative workflow spend.

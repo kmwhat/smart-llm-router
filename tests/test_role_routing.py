@@ -326,6 +326,41 @@ class RoleRoutingTests(unittest.TestCase):
                     )
         call.assert_not_called()
 
+    def test_minimax_enters_paid_text_pool_only_with_explicit_budget(self) -> None:
+        provider = LLMProvider(
+            "minimax-frontier-paid",
+            "https://api.minimaxi.com/v1",
+            "MINIMAX_KEY",
+            ("MiniMax-M3",),
+            False,
+            1,
+            "paid",
+        )
+        with patch.dict(
+            os.environ,
+            {"MINIMAX_KEY": "test", "SMART_LLM_CACHE": "false"},
+            clear=True,
+        ):
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})) as call:
+                result = run_llm_task(
+                    self._settings((provider,)),
+                    task="qa",
+                    prompt="只输出 OK",
+                    prefer_free=False,
+                    paid_fallback=True,
+                    max_cost_usd=0.01,
+                    max_output_tokens=8,
+                    thinking_mode="disabled",
+                    final_answer_reserve_tokens=8,
+                    privacy="external_allowed",
+                )
+
+        self.assertEqual(result.provider, "minimax-frontier-paid")
+        self.assertEqual(result.model, "MiniMax-M3")
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args.kwargs["thinking"], {"type": "disabled"})
+        self.assertEqual(call.call_args.kwargs["max_tokens"], 8)
+
     def test_golden_evaluation_can_call_exact_unqualified_role_candidate(self) -> None:
         provider = LLMProvider(
             "openrouter-free",

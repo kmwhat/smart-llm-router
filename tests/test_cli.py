@@ -25,7 +25,7 @@ class CliTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0rc2")
+        self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0rc3")
 
     def test_credential_catalog_is_a_global_option(self) -> None:
         args = build_parser().parse_args(["--credential-catalog", "/tmp/catalog", "providers"])
