@@ -6,8 +6,8 @@ All notable changes to this project are documented in this file.
 
 ## 0.9.0 - 2026-08-11
 
-- Promoted the independently verified 0.9.0 release-candidate series to a
-  stable-version candidate without changing provider routes, role-quality
+- Promoted the independently verified 0.9.0 release-candidate series to the
+  stable release without changing provider routes, role-quality
   bands, privacy policy, or paid-authorization behavior.
 - Preserved caller working-directory semantics while binding the portable
   launcher to its staged source, preventing a same-named package in the caller
