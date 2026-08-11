@@ -6,18 +6,22 @@ from smart_llm_router.router import _clean_transcript_locally
 
 
 class PublicPackageBoundaryTests(unittest.TestCase):
-    def test_release_metadata_matches_candidate_version(self) -> None:
+    def test_release_metadata_matches_stable_version(self) -> None:
         root = Path(__file__).resolve().parents[1]
         readme = (root / "README.md").read_text(encoding="utf-8")
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
         readiness = (root / "RELEASE_READINESS.md").read_text(encoding="utf-8")
-        self.assertIn(f"`{__version__}` 是当前发布候选版", readme)
-        self.assertNotIn(
+        self.assertIn(f"`{__version__}` 稳定版的规范安装命令如下", readme)
+        self.assertIn(
             f"/releases/download/v{__version__}/smart_llm_router-{__version__}-py3-none-any.whl",
             readme,
         )
+        self.assertNotIn(
+            "/releases/download/v0.8.4/smart_llm_router-0.8.4-py3-none-any.whl",
+            readme,
+        )
         self.assertIn(f"## {__version__} - ", changelog)
-        self.assertIn(f"## {__version__} ", readiness)
+        self.assertIn(f"## {__version__} Stable Release ", readiness)
         current_readiness = readiness.split("## 0.6.0rc2", 1)[0]
         self.assertNotIn("not committed, pushed, tagged, or published", current_readiness)
 
