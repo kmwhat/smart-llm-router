@@ -1,5 +1,24 @@
 # Public Release Readiness
 
+## 0.9.0rc3 MiniMax Paid Route and Sectioned Catalog Candidate — 2026-08-11
+
+Status: local release candidate only. Protected pull request, CI, tag,
+publication, registry acceptance, and runtime projection remain separately gated.
+
+- Package metadata, runtime version, README, changelog, and CLI report
+  `0.9.0rc3` without claiming a public wheel, tag, or GitHub Release.
+- MiniMax China-region `MiniMax-M3` and `MiniMax-M2.7` are paid text candidates
+  that require explicit paid authorization and a finite per-call cost ceiling.
+- MiniMax has no `plan`, `audit`, `verify`, or other governed role-quality band;
+  health and budget evidence cannot substitute for a role-matched golden gate.
+- Section-aware credential catalogs admit funded paid and free sections only.
+  Unfunded paid entries are excluded from executable slots and reported only as
+  sanitized aggregate counts; legacy unsectioned catalogs remain compatible.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+- Further provider calls, role-table changes, publication, accepted-registry
+  changes, and Codex/Hermes runtime projection remain outside this candidate gate.
+
 ## 0.9.0rc2 NVIDIA DeepSeek V4 Adapter Candidate — 2026-08-10
 
 Status: clean local version candidate and full validation are required before

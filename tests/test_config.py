@@ -100,6 +100,7 @@ class ConfigTests(unittest.TestCase):
                 "KIMI_API_KEY": "test",
                 "GEMINI_API_KEY": "test",
                 "ARK_API_KEY": "test",
+                "MINIMAX_API_KEY": "test",
             },
             clear=True,
         ):
@@ -117,6 +118,10 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("gemini-free", names)
         self.assertNotIn("gemini-frontier-paid", names)
         self.assertIn("doubao-frontier-paid", names)
+        self.assertIn("minimax-frontier-paid", names)
+        minimax = next(provider for provider in settings.providers if provider.name == "minimax-frontier-paid")
+        self.assertFalse(minimax.free)
+        self.assertEqual(minimax.billing_class, "paid")
 
     def test_gemini_paid_provider_requires_explicit_billing_opt_in(self) -> None:
         with patch.dict(

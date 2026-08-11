@@ -3,9 +3,12 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.0rc2 release candidate adds NVIDIA-hosted DeepSeek V4 request compatibility
-and served-model identity validation without promoting the model into audit roles.
-It retains the 0.9.0rc1 request-scoped OpenRouter upstream controls, fail-closed
+The 0.9.0rc3 release candidate adds a budget-guarded China-region MiniMax paid
+text route and section-aware credential-catalog loading that excludes unfunded
+paid credentials from executable slots. MiniMax has no production role-quality
+promotion in this candidate. It retains the 0.9.0rc2 NVIDIA-hosted DeepSeek V4
+request compatibility and served-model identity validation, plus the 0.9.0rc1
+request-scoped OpenRouter upstream controls, fail-closed
 Zero Data Retention and data-collection policy enforcement, strict structured-output
 transport plus bounded local validation, and explicit runtime provenance. It
 preserves the 0.8.4 conservative paid input-token forecast guarding
@@ -26,6 +29,12 @@ ledger-derived route health, golden-set promotion gates, multimodal provider reg
 loading from an optional credential catalog selected with
 `SMART_LLM_CREDENTIAL_CATALOG`. Secret values remain local and in process
 memory; provider/status output never prints them.
+
+Sectioned credential catalogs may use `付费模型`, `免费模型`, and
+`付费未充值模型` headings. Only the first two sections are admitted;
+unfunded paid credentials are counted for sanitized diagnostics but are never
+loaded into executable environment slots. Legacy unsectioned catalogs remain
+compatible.
 
 The July 7 Hermes Router Hub skillpack is treated as a governance protocol, not
 as a replacement for this router's real provider adapters. Its dry-run server
@@ -107,6 +116,7 @@ $HOME/.local/state/smart-llm-router
 - 失败冷却：429、超时、403、空返回会进入冷却，下次跳过。
 - 免费池全冷却自救：调用前轻量探活，避免误入付费。
 - 角色路线同时考虑任务专长与成本：DeepSeek V4、Qwen 3.7、GLM-5.2、Kimi K3、Gemini Free Tier 和 Doubao Seed 2.1/2.0 分工协作。
+- MiniMax 中国区付费文本路线：`MiniMax-M3` 为普通文本付费候选，`MiniMax-M2.7` 为同供应商回退；两者必须通过显式付费与预算门，且在角色 golden gate 通过前没有 plan/audit/verify 质量档。
 - 规划模型不强制免费：先由复杂度与风险确定质量档，再在同档合格路线中按重试修正后的预期总成本和延迟选择。
 - DeepSeek-V4-Flash-0731 已登记为待晋升候选；受控规划集完成 2/5 后遇到 529，稳定性门未过，暂不进入生产角色。
 - 本地复杂度评分：先判断 `simple`、`medium`、`hard` 并确定质量门；复杂度不会自动授予付费权限。
@@ -126,13 +136,13 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.0rc2` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
-`0.9.0rc2` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
+`0.9.0rc3` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
+`0.9.0rc3` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.7.0/smart_llm_router-0.7.0-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.8.4/smart_llm_router-0.8.4-py3-none-any.whl"
 smart-llm-router --help
 ```
 

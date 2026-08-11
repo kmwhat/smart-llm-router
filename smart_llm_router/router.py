@@ -198,6 +198,7 @@ DEFAULT_TASK_ORDER = {
 
 PAID_FALLBACK_ORDER = [
     "deepseek-direct-paid",
+    "minimax-frontier-paid",
     "openrouter-deepseek-fallback",
     "zhipu-glm-lowcost",
     "qwen-frontier-paid",
@@ -392,6 +393,10 @@ MODEL_PRICE_CATALOG: dict[str, dict[str, float | str]] = {
     "kimi-k3": {"input": 20.0, "output": 100.0, "currency": "CNY"},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.0, "currency": "USD"},
     "gemini-3.1-pro-preview": {"input": 2.0, "output": 12.0, "currency": "USD"},
+    # MiniMax-M3 has tiered pricing above 512k input tokens. Use the higher
+    # public standard-tier price here so local USD budgets never under-reserve.
+    "minimax-m3": {"input": 4.2, "output": 16.8, "currency": "CNY"},
+    "minimax-m2.7": {"input": 2.1, "output": 8.4, "currency": "CNY"},
 }
 
 # Reasoning endpoints can bill hidden reasoning tokens in addition to the
@@ -419,6 +424,13 @@ PROVIDER_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
 MODEL_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
     "deepseek-v4-flash": 1.15,
     "deepseek-v4-pro": 1.15,
+}
+# Provider tokenizers may add a fixed chat-template/system envelope that is
+# disproportionate for tiny prompts. The first bounded MiniMax-M3 canary
+# reported 199 input tokens for a local estimate of 48; reserve that observed
+# fixed delta plus margin without multiplying every large prompt by 4x.
+MODEL_INPUT_TOKEN_GUARD_OVERHEAD: dict[str, int] = {
+    "minimax-m3": 160,
 }
 MAX_GUARDED_INPUT_TOKENS = (1 << 63) - 1
 
@@ -520,6 +532,16 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
             "multimodal_reasoning": ["kimi-k3", "kimi-k2.6"],
         },
         "notes": "Long-context paid multimodal family for knowledge work, long-horizon agents, and final quality enhancement.",
+    },
+    "minimax": {
+        "env_keys": ["MINIMAX_API_KEY"],
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "task_types": ["classify", "clean", "summarize", "qa", "draft", "transcript_correct", "code"],
+        "model_modes": {
+            "text_reasoning": ["MiniMax-M3", "MiniMax-M2.7"],
+        },
+        "notes": "China-region paid OpenAI-compatible text route. Role-quality bands remain unregistered until matching golden gates pass.",
     },
 }
 
@@ -677,6 +699,8 @@ def _provider_family(provider: LLMProvider) -> str:
         return "deepseek"
     if "moonshot" in text or "kimi" in text:
         return "kimi"
+    if "minimax" in text or "minimaxi.com" in text:
+        return "minimax"
     return _family_name(provider.name)
 
 
@@ -1905,6 +1929,15 @@ def router_doctor(
             "credential_catalog_path": catalog.path if catalog else None,
             "credential_catalog_providers": list(catalog.providers) if catalog else [],
             "credential_counts": dict(catalog.key_counts) if catalog else {},
+            "credential_catalog_sectioned": bool(catalog and catalog.sectioned),
+            "credential_counts_by_billing": [
+                {"billing_class": section, "provider": provider, "count": count}
+                for section, provider, count in (catalog.billing_key_counts if catalog else ())
+            ],
+            "credential_skipped_counts": [
+                {"billing_class": section, "provider": provider, "count": count}
+                for section, provider, count in (catalog.skipped_key_counts if catalog else ())
+            ],
             "runtime_dir": str(settings.data_dir),
             "runtime_dir_source": settings.runtime_dir_source,
             "runtime_fallback_active": bool(settings.runtime_fallback_reason),
@@ -3296,10 +3329,13 @@ def _guarded_input_token_evidence(
         MODEL_INPUT_TOKEN_GUARD_FACTORS.get(choice.model.lower(), 1.0),
         explicit or 1.0,
     )
+    overhead = MODEL_INPUT_TOKEN_GUARD_OVERHEAD.get(choice.model.lower(), 0)
     if not math.isfinite(selected) or selected <= 0:
         raise ValueError("输入 token 安全系数必须为有限正数")
     try:
-        guarded_decimal = (Decimal(raw_input_tokens) * Decimal(str(selected))).to_integral_value(rounding=ROUND_CEILING)
+        guarded_decimal = (
+            Decimal(raw_input_tokens) * Decimal(str(selected)) + Decimal(overhead)
+        ).to_integral_value(rounding=ROUND_CEILING)
         guarded = int(guarded_decimal)
     except (InvalidOperation, OverflowError, ValueError) as exc:
         raise ValueError("guarded_input_tokens 计算失败") from exc
@@ -3308,8 +3344,13 @@ def _guarded_input_token_evidence(
     return {
         "raw_input_tokens_est": raw_input_tokens,
         "guarded_input_tokens": guarded,
-        "guard_method": "provider_model_conservative_factor",
+        "guard_method": (
+            "provider_model_conservative_factor_plus_overhead"
+            if overhead
+            else "provider_model_conservative_factor"
+        ),
         "guard_factor": selected,
+        "guard_overhead_tokens": overhead,
     }
 
 
@@ -3319,6 +3360,7 @@ def _budget_evidence_fields(budget: dict[str, Any]) -> dict[str, Any]:
         "guarded_input_tokens": budget.get("guarded_input_tokens"),
         "guard_method": budget.get("guard_method"),
         "guard_factor": budget.get("guard_factor"),
+        "guard_overhead_tokens": budget.get("guard_overhead_tokens"),
         "reserved_output_tokens": budget.get("reserved_output_tokens"),
         "projected_cost_usd": budget.get("projected_cost_usd"),
         "spend_ceiling_semantics": "local_forecast_guard_not_provider_enforced",
@@ -3347,6 +3389,7 @@ def _budget_status(
             "guarded_input_tokens": input_tokens,
             "guard_method": "not_applied_free_or_unbudgeted",
             "guard_factor": 1.0,
+            "guard_overhead_tokens": 0,
         }
     )
     projected = _estimated_cost_usd(choice, token_evidence["guarded_input_tokens"], reserved_output_tokens)
@@ -4329,7 +4372,8 @@ def _thinking_plan(
         provider_family in {"deepseek", "nvidia"}
         and _is_deepseek_v4_choice(choice)
     )
-    if not is_qwen_hybrid and not is_deepseek_hybrid:
+    is_minimax_m3 = provider_family == "minimax" and model == "minimax-m3"
+    if not is_qwen_hybrid and not is_deepseek_hybrid and not is_minimax_m3:
         return {
             "mode": "unsupported",
             "enable_thinking": None,
@@ -4338,6 +4382,33 @@ def _thinking_plan(
             "total_output_tokens": total_output_tokens,
         }
     mode = thinking_mode
+    if is_minimax_m3:
+        if thinking_budget_tokens is not None:
+            raise RuntimeError("MiniMax-M3 不支持独立 thinking token budget。")
+        if mode == "auto" and final_answer_reserve_tokens is not None:
+            mode = "disabled"
+        if mode == "disabled":
+            return {
+                "mode": "disabled",
+                "thinking": {"type": "disabled"},
+                "enable_thinking": None,
+                "thinking_budget_tokens": 0,
+                "final_answer_reserve_tokens": total_output_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        if mode == "enabled" and final_answer_reserve_tokens is not None:
+            raise RuntimeError(
+                "MiniMax-M3 thinking=enabled 无法保证独立 final-answer reserve；"
+                "请改用 thinking_mode=disabled。"
+            )
+        return {
+            "mode": mode,
+            "thinking": {"type": "adaptive"} if mode == "enabled" else None,
+            "enable_thinking": None,
+            "thinking_budget_tokens": None,
+            "final_answer_reserve_tokens": None,
+            "total_output_tokens": total_output_tokens,
+        }
     if is_deepseek_hybrid:
         if thinking_budget_tokens is not None:
             raise RuntimeError(
@@ -4525,11 +4596,19 @@ def _call_openai_compatible(
         raise RuntimeError(f"缺少 API key 环境变量：{choice.provider.api_key_env}")
     effective_temperature = 1 if _model_family(choice) == "kimi" else temperature
     payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": effective_temperature}
+    provider_family = _provider_family(choice.provider)
     if max_tokens:
-        if _provider_family(choice.provider) == "qwen" and choice.model.lower() in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD:
+        if provider_family == "minimax" or (
+            provider_family == "qwen" and choice.model.lower() in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD
+        ):
             payload["max_completion_tokens"] = max_tokens
         else:
             payload["max_tokens"] = max_tokens
+    if provider_family == "minimax":
+        # MiniMax reasoning models can include private thinking in content.
+        # Split it into reasoning fields so the routed result contains only
+        # the user-visible final answer.
+        payload["reasoning_split"] = True
     if enable_thinking is not None:
         payload["enable_thinking"] = enable_thinking
     if thinking_budget_tokens is not None:
@@ -4601,6 +4680,15 @@ def _call_openai_compatible(
                 ) from None
             raise
         data = response.json()
+    if provider_family == "minimax":
+        base_resp = data.get("base_resp") if isinstance(data, dict) else None
+        raw_status = base_resp.get("status_code") if isinstance(base_resp, dict) else 0
+        try:
+            minimax_status = int(raw_status or 0)
+        except (TypeError, ValueError):
+            minimax_status = -1
+        if minimax_status != 0:
+            raise RuntimeError(f"minimax_api_error:{minimax_status}")
     raw_served_model = data.get("model")
     served_model = raw_served_model.strip() if isinstance(raw_served_model, str) else None
     served_model = served_model or None

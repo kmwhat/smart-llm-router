@@ -16,6 +16,7 @@ PROVIDER_ENV = {
     "openrouter": "OPENROUTER_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
     "groq": "GROQ_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
 }
 
 # Provider-specific prefixes and shapes prevent nearby labels, account ids,
@@ -26,6 +27,7 @@ PROVIDER_SECRET_PATTERNS = {
     "openrouter": re.compile(r"sk-or-v1-[A-Za-z0-9_-]{20,}"),
     "nvidia": re.compile(r"nvapi-[A-Za-z0-9_-]{20,}"),
     "groq": re.compile(r"gsk_[A-Za-z0-9_-]{20,}"),
+    "minimax": re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
 }
 
 HEADING_PATTERNS = (
@@ -38,6 +40,13 @@ HEADING_PATTERNS = (
     ("openrouter", re.compile(r"openrouter", re.I)),
     ("nvidia", re.compile(r"nvidia", re.I)),
     ("groq", re.compile(r"groq", re.I)),
+    ("minimax", re.compile(r"mini\s*max|minimax|稀宇", re.I)),
+)
+
+CATALOG_SECTION_PATTERNS = (
+    ("paid_unfunded", re.compile(r"(?:付费.*未充值|未充值.*付费|paid.*unfunded|unfunded.*paid)", re.I)),
+    ("free", re.compile(r"(?:免费模型|free\s+models?)", re.I)),
+    ("paid", re.compile(r"(?:付费模型|paid\s+models?)", re.I)),
 )
 
 NON_MODEL_SECTION = re.compile(
@@ -52,12 +61,22 @@ class CredentialCatalogSummary:
     providers: tuple[str, ...]
     key_counts: tuple[tuple[str, int], ...]
     endpoint_ids: tuple[str, ...]
+    sectioned: bool = False
+    billing_key_counts: tuple[tuple[str, str, int], ...] = ()
+    skipped_key_counts: tuple[tuple[str, str, int], ...] = ()
 
 
 def _heading(line: str) -> str | None:
     for provider, pattern in HEADING_PATTERNS:
         if pattern.search(line):
             return provider
+    return None
+
+
+def _catalog_section(line: str) -> str | None:
+    for section, pattern in CATALOG_SECTION_PATTERNS:
+        if pattern.search(line):
+            return section
     return None
 
 
@@ -88,13 +107,27 @@ def load_model_credential_catalog(path: str | Path, *, override: bool = True) ->
         raise FileNotFoundError(f"credential catalog not found: {source}")
 
     current: str | None = None
+    current_section = "legacy"
+    sectioned = False
     values: dict[str, list[str]] = {name: [] for name in PROVIDER_ENV}
-    endpoint_ids: list[str] = []
+    values_by_section: dict[str, dict[str, list[str]]] = {
+        section: {name: [] for name in PROVIDER_ENV}
+        for section in ("legacy", "free", "paid", "paid_unfunded")
+    }
+    endpoint_ids_by_section: dict[str, list[str]] = {
+        section: [] for section in ("legacy", "free", "paid", "paid_unfunded")
+    }
     for raw in source.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.strip()
         if not line:
             continue
         if NON_MODEL_SECTION.search(line):
+            current = None
+            continue
+        section = _catalog_section(line)
+        if section:
+            current_section = section
+            sectioned = True
             current = None
             continue
         heading = _heading(line)
@@ -103,10 +136,59 @@ def load_model_credential_catalog(path: str | Path, *, override: bool = True) ->
             continue
         endpoint = re.search(r"\bep-[A-Za-z0-9-]+\b", line)
         if current == "doubao" and endpoint:
-            endpoint_ids.append(endpoint.group(0))
+            endpoint_id = endpoint.group(0)
+            if endpoint_id not in endpoint_ids_by_section[current_section]:
+                endpoint_ids_by_section[current_section].append(endpoint_id)
             continue
-        if current and _looks_like_provider_secret(current, line) and line not in values[current]:
-            values[current].append(line)
+        if current and _looks_like_provider_secret(current, line):
+            section_values = values_by_section[current_section][current]
+            if line not in section_values:
+                section_values.append(line)
+
+    admitted_sections = ("free", "paid") if sectioned else ("legacy",)
+    existing_values: dict[str, list[str]] = {}
+    for provider, env_name in PROVIDER_ENV.items():
+        existing_values[provider] = []
+        for index in range(1, 21):
+            value = os.getenv(env_name if index == 1 else f"{env_name}_{index}", "").strip()
+            if value and value not in existing_values[provider]:
+                existing_values[provider].append(value)
+    endpoint_ids: list[str] = []
+    for section in admitted_sections:
+        for endpoint_id in endpoint_ids_by_section[section]:
+            if endpoint_id not in endpoint_ids:
+                endpoint_ids.append(endpoint_id)
+    for provider in PROVIDER_ENV:
+        for section in admitted_sections:
+            for value in values_by_section[section][provider]:
+                if value not in values[provider]:
+                    values[provider].append(value)
+
+    if sectioned:
+        # A section heading is a billing declaration, not proof that every
+        # nearby token is a live credential. Preserve rotations already
+        # validated into the private environment when they remain in the
+        # active sections; otherwise admit only the first candidate.
+        for provider, candidates in values.items():
+            retained = [value for value in existing_values[provider] if value in candidates]
+            values[provider] = retained or candidates[:1]
+
+    # A sectioned catalog is authoritative for providers that it names. Clear
+    # stale or explicitly unfunded slots before admitting active credentials;
+    # legacy unsectioned catalogs retain the historical additive behaviour.
+    if sectioned and override:
+        catalog_providers = {
+            provider
+            for section_values in values_by_section.values()
+            for provider, candidates in section_values.items()
+            if candidates
+        }
+        for provider in catalog_providers:
+            env_name = PROVIDER_ENV[provider]
+            for index in range(1, 21):
+                os.environ.pop(env_name if index == 1 else f"{env_name}_{index}", None)
+        if "doubao" in catalog_providers:
+            os.environ.pop("ARK_ENDPOINT_ID", None)
 
     for provider, env_name in PROVIDER_ENV.items():
         candidates = values[provider]
@@ -127,9 +209,23 @@ def load_model_credential_catalog(path: str | Path, *, override: bool = True) ->
 
     configured = tuple(name for name, candidates in values.items() if candidates)
     counts = tuple((name, len(values[name])) for name in configured)
+    billing_counts = tuple(
+        (section, provider, len(values_by_section[section][provider]))
+        for section in ("free", "paid")
+        for provider in PROVIDER_ENV
+        if values_by_section[section][provider]
+    )
+    skipped_counts = tuple(
+        ("paid_unfunded", provider, len(values_by_section["paid_unfunded"][provider]))
+        for provider in PROVIDER_ENV
+        if values_by_section["paid_unfunded"][provider]
+    )
     return CredentialCatalogSummary(
         path=str(source),
         providers=configured,
         key_counts=counts,
         endpoint_ids=tuple(endpoint_ids),
+        sectioned=sectioned,
+        billing_key_counts=billing_counts,
+        skipped_key_counts=skipped_counts,
     )

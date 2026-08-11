@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.0rc3 - 2026-08-11
+
+- Added a China-region paid MiniMax text route for `MiniMax-M3` with
+  `MiniMax-M2.7` fallback, current OpenAI-compatible request fields, reasoning
+  separation, conservative CNY pricing and tokenizer overhead, and no
+  role-quality promotion.
+- Added section-aware credential catalog loading for funded paid, free, and
+  unfunded paid groups. Unfunded credentials are reported only as sanitized
+  counts and are excluded from executable slots.
+
 ## 0.9.0rc2 - 2026-08-10
 
 - Adapted NVIDIA-hosted DeepSeek V4 requests to the official

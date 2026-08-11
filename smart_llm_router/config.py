@@ -138,6 +138,7 @@ def _load_providers() -> tuple[LLMProvider, ...]:
         )
     )
     automatic = (
+        LLMProvider("minimax-frontier-paid", "https://api.minimaxi.com/v1", "MINIMAX_API_KEY", ("MiniMax-M3", "MiniMax-M2.7"), False, 7, "paid"),
         LLMProvider("deepseek-direct-paid", "https://api.deepseek.com", "DEEPSEEK_API_KEY", ("deepseek-v4-flash", "deepseek-v4-pro"), False, 7, "paid"),
         LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", ("qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"), False, 7, "paid"),
         LLMProvider("kimi-frontier-paid", "https://api.moonshot.cn/v1", "KIMI_API_KEY", ("kimi-k3", "kimi-k2.6"), False, 7, "paid"),
