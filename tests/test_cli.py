@@ -1,7 +1,9 @@
 import io
+import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,22 +12,85 @@ from smart_llm_router.cli import build_parser, main
 
 
 class CliTests(unittest.TestCase):
-    def test_package_launcher_binds_staged_source_with_external_venv(self) -> None:
+    @staticmethod
+    def _package_launcher() -> Path:
         tool_root = Path(__file__).resolve().parents[1]
         package_launcher = tool_root.parent / "bin" / "smart-llm-router"
-        launcher = (
-            package_launcher if package_launcher.is_file() else tool_root / "bin" / "smart-llm-router"
+        return (
+            package_launcher
+            if package_launcher.is_file()
+            else tool_root / "bin" / "smart-llm-router"
         )
-        env = dict(os.environ)
-        env.update({"SMART_LLM_PYTHON": sys.executable, "PYTHONPATH": ""})
-        result = subprocess.run(
-            [str(launcher), "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0rc3")
+
+    @staticmethod
+    def _isolated_launcher_env(root: Path) -> dict[str, str]:
+        return {
+            "HOME": str(root),
+            "PATH": os.environ.get("PATH", os.defpath),
+            "PYTHONPATH": "",
+            "SMART_LLM_PYTHON": sys.executable,
+            "SMART_LLM_ENV_FILE": "/dev/null",
+            "SMART_LLM_CREDENTIAL_CATALOG": "/dev/null",
+            "SMART_LLM_RUNTIME_DIR": str(root / "runtime"),
+        }
+
+    def test_package_launcher_binds_staged_source_with_external_venv(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result = subprocess.run(
+                [str(self._package_launcher()), "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=self._isolated_launcher_env(root),
+            )
+            self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0rc3")
+
+    def test_package_launcher_ignores_same_named_package_in_caller_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shadow = root / "smart_llm_router"
+            shadow.mkdir()
+            (shadow / "__init__.py").write_text("# synthetic shadow package\n", encoding="utf-8")
+            (shadow / "cli.py").write_text("print('SHADOWED_CALLER_PACKAGE')\n", encoding="utf-8")
+            result = subprocess.run(
+                [str(self._package_launcher()), "--version"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=self._isolated_launcher_env(root),
+            )
+            self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0rc3")
+
+    def test_package_launcher_preserves_caller_relative_paths(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            contract = root / "contract.json"
+            contract.write_bytes((tool_root / "examples/task_contract.example.json").read_bytes())
+            result = subprocess.run(
+                [
+                    str(self._package_launcher()),
+                    "contract-plan",
+                    contract.name,
+                    "--receipt-dir",
+                    "receipts",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=self._isolated_launcher_env(root),
+            )
+            payload = json.loads(result.stdout)
+            receipt_path = Path(payload["receipt"]["receipt_path"])
+            resolved_receipt = (
+                receipt_path if receipt_path.is_absolute() else root / receipt_path
+            )
+            self.assertEqual(payload["contract"]["task_id"], "public-example-001")
+            self.assertEqual(resolved_receipt.parent.resolve(), (root / "receipts").resolve())
+            self.assertTrue(resolved_receipt.is_file())
 
     def test_credential_catalog_is_a_global_option(self) -> None:
         args = build_parser().parse_args(["--credential-catalog", "/tmp/catalog", "providers"])
