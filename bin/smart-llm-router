@@ -25,9 +25,18 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 ENV_FILE=${SMART_LLM_ENV_FILE:-"$PROJECT_ROOT/.env"}
-export PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 exec "$PYTHON_BIN" \
-  -m smart_llm_router.cli \
+  -I \
+  -c '
+import runpy
+import sys
+
+project_root = sys.argv.pop(1)
+sys.path.insert(0, project_root)
+sys.argv[0] = "smart-llm-router"
+runpy.run_module("smart_llm_router.cli", run_name="__main__")
+' \
+  "$PROJECT_ROOT" \
   --env-file "$ENV_FILE" \
   "$@"
