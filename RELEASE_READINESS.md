@@ -1,5 +1,25 @@
 # Public Release Readiness
 
+## 0.9.0 Stable Release Candidate — 2026-08-11
+
+Status: local stable-version candidate only. Protected pull request, CI, tag,
+publication, registry acceptance, and runtime projection remain separately gated.
+
+- Package metadata, runtime version, README, changelog, and CLI report `0.9.0`
+  without claiming a public wheel, tag, or GitHub Release.
+- The candidate changes release metadata only; provider routes, production role
+  quality bands, privacy policy, paid authorization, and task descriptor defaults
+  are unchanged from the accepted 0.9.0rc3 source.
+- The portable launcher retains the verified source-binding repair while
+  preserving caller working-directory and relative-path behavior.
+- MiniMax remains an explicitly authorized paid text fallback without governed
+  role-quality promotion. DeepSeek V4 Flash remains pending its role-matched
+  audit-quality gates.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+- Provider calls, tag creation, publication, accepted-registry changes, and
+  Codex/Hermes runtime projection remain outside this candidate gate.
+
 ## 0.9.0rc3 MiniMax Paid Route and Sectioned Catalog Candidate — 2026-08-11
 
 Status: local release candidate only. Protected pull request, CI, tag,

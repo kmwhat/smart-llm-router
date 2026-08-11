@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.0 - 2026-08-11
+
+- Promoted the independently verified 0.9.0 release-candidate series to a
+  stable-version candidate without changing provider routes, role-quality
+  bands, privacy policy, or paid-authorization behavior.
+- Preserved caller working-directory semantics while binding the portable
+  launcher to its staged source, preventing a same-named package in the caller
+  directory from shadowing the intended runtime.
+- Consolidated the OpenRouter policy controls, NVIDIA-hosted DeepSeek V4
+  compatibility, and budget-guarded MiniMax catalog support described in the
+  0.9.0rc1 through 0.9.0rc3 entries below.
+
 ## 0.9.0rc3 - 2026-08-11
 
 - Added a China-region paid MiniMax text route for `MiniMax-M3` with

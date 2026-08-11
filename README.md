@@ -3,10 +3,11 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.0rc3 release candidate adds a budget-guarded China-region MiniMax paid
+The 0.9.0 stable release candidate consolidates the budget-guarded China-region MiniMax paid
 text route and section-aware credential-catalog loading that excludes unfunded
 paid credentials from executable slots. MiniMax has no production role-quality
-promotion in this candidate. It retains the 0.9.0rc2 NVIDIA-hosted DeepSeek V4
+promotion in this candidate. It includes the 0.9.0rc3 launcher source-isolation
+repair, the 0.9.0rc2 NVIDIA-hosted DeepSeek V4
 request compatibility and served-model identity validation, plus the 0.9.0rc1
 request-scoped OpenRouter upstream controls, fail-closed
 Zero Data Retention and data-collection policy enforcement, strict structured-output
@@ -136,8 +137,8 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.0rc3` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
-`0.9.0rc3` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
+`0.9.0` 是当前发布候选版，在对应的 GitHub Release 完成前，不宣称已存在公开
+`0.9.0` 轮子。已发布的稳定版可按下面方式安装；验证本候选版请按下一节从源码安装：
 
 ```bash
 python3 -m venv .venv
