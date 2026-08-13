@@ -78,16 +78,19 @@ class RoleRoutingTests(unittest.TestCase):
         selected = [stage["selected"] for stage in plan["role_pipeline"]]
         self.assertEqual([row["model"] for row in selected], [
             "qwen3.7-max",
+            "qwen3.7-max",
+            "deepseek-v4-pro",
             "glm-5.2",
             "gemini-2.5-pro",
             "gemini-2.5-pro",
             "kimi-k3",
         ])
-        self.assertEqual(len({row["model_family"] for row in selected}), 4)
-        self.assertTrue(selected[2]["free"])
-        self.assertTrue(selected[3]["free"])
-        self.assertNotEqual(selected[0]["model_family"], selected[2]["model_family"])
-        self.assertNotEqual(selected[1]["model_family"], selected[3]["model_family"])
+        self.assertEqual(len({row["model_family"] for row in selected}), 5)
+        self.assertFalse(selected[2]["free"])
+        self.assertTrue(selected[4]["free"])
+        self.assertTrue(selected[5]["free"])
+        self.assertNotEqual(selected[1]["model_family"], selected[2]["model_family"])
+        self.assertNotEqual(selected[3]["model_family"], selected[5]["model_family"])
 
     def test_role_execution_uses_one_free_model_when_quality_band_is_equal(self) -> None:
         providers = (
@@ -95,7 +98,7 @@ class RoleRoutingTests(unittest.TestCase):
             LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "DEEPSEEK_KEY", ("deepseek-v4-pro",), False, 2, "paid"),
         )
         with patch.dict(os.environ, {"GEMINI_KEY": "test", "DEEPSEEK_KEY": "test", "SMART_LLM_CACHE": "false"}, clear=True):
-            with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})) as call:
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=('{"decision":"pass"}', {})) as call:
                 result = run_llm_task(
                     self._settings(providers),
                     task="audit",
@@ -166,7 +169,7 @@ class RoleRoutingTests(unittest.TestCase):
                 prompt="独立复验公开任务",
                 quality_target="draft",
             )
-            with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})) as call:
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=('{"decision":"pass"}', {})) as call:
                 result = run_llm_task(
                     settings,
                     task="verify",
@@ -213,6 +216,29 @@ class RoleRoutingTests(unittest.TestCase):
         self.assertTrue(execute["recommended_order"][0]["free"])
         self.assertEqual(execute["recommended_order"][0]["role_quality_band"], 3)
 
+    def test_provider_prefixed_free_alias_inherits_registered_role_band(self) -> None:
+        provider = LLMProvider(
+            "nvidia-free",
+            "https://nvidia.test/v1",
+            "NVIDIA_KEY",
+            ("deepseek-ai/deepseek-v4-pro",),
+            True,
+            1,
+            "trial_quota",
+            True,
+        )
+        with patch.dict(os.environ, {"NVIDIA_KEY": "test"}, clear=True):
+            result = recommend_route(
+                self._settings((provider,)),
+                task="plan",
+                prompt="规划复杂生产系统",
+                paid_fallback=False,
+                quality_target="production",
+            )
+
+        self.assertEqual(result["recommended_order"][0]["model"], "deepseek-ai/deepseek-v4-pro")
+        self.assertEqual(result["recommended_order"][0]["role_quality_band"], 3)
+
     def test_frontier_role_fails_closed_without_band_four(self) -> None:
         provider = LLMProvider("gemini-free", "https://gemini.test/v1", "GEMINI_KEY", ("gemini-2.5-pro",), True, 1, "trial_quota", True)
         settings = self._settings((provider,))
@@ -249,6 +275,129 @@ class RoleRoutingTests(unittest.TestCase):
                 quality_target="production",
             )
         self.assertEqual([row["model"] for row in result["recommended_order"]], ["deepseek-v4-pro"])
+
+    def test_key_rotation_is_preserved_during_role_execution(self) -> None:
+        providers = (
+            LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "KEY_1", ("deepseek-v4-pro",), False, 1, "paid"),
+            LLMProvider("deepseek-direct-paid-key2", "https://deepseek.test/v1", "KEY_2", ("deepseek-v4-pro",), False, 2, "paid"),
+        )
+        with patch.dict(
+            os.environ,
+            {"KEY_1": "one", "KEY_2": "two", "SMART_LLM_CACHE": "false"},
+            clear=True,
+        ):
+            with patch(
+                "smart_llm_router.router._call_openai_compatible",
+                side_effect=[RuntimeError("429 quota"), ("OK", {})],
+            ) as call:
+                result = run_llm_task(
+                    self._settings(providers),
+                    task="execute",
+                    prompt="执行复杂重构",
+                    prefer_free=False,
+                    paid_fallback=True,
+                    max_cost_usd=0.05,
+                    quality_target="production",
+                    privacy="external_allowed",
+                )
+
+        self.assertEqual(result.provider, "deepseek-direct-paid-key2")
+        self.assertEqual(call.call_count, 2)
+
+    def test_paid_route_cannot_execute_without_explicit_paid_fallback(self) -> None:
+        provider = LLMProvider(
+            "deepseek-direct-paid",
+            "https://deepseek.test/v1",
+            "KEY",
+            ("deepseek-v4-pro",),
+            False,
+            1,
+            "paid",
+        )
+        with patch.dict(os.environ, {"KEY": "test", "SMART_LLM_CACHE": "false"}, clear=True):
+            with patch("smart_llm_router.router._call_openai_compatible") as call:
+                with self.assertRaisesRegex(RuntimeError, "没有可用模型"):
+                    run_llm_task(
+                        self._settings((provider,)),
+                        task="draft",
+                        prompt="执行复杂任务",
+                        prefer_free=False,
+                        privacy="external_allowed",
+                    )
+        call.assert_not_called()
+
+    def test_minimax_enters_paid_text_pool_only_with_explicit_budget(self) -> None:
+        provider = LLMProvider(
+            "minimax-frontier-paid",
+            "https://api.minimaxi.com/v1",
+            "MINIMAX_KEY",
+            ("MiniMax-M3",),
+            False,
+            1,
+            "paid",
+        )
+        with patch.dict(
+            os.environ,
+            {"MINIMAX_KEY": "test", "SMART_LLM_CACHE": "false"},
+            clear=True,
+        ):
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=("OK", {})) as call:
+                result = run_llm_task(
+                    self._settings((provider,)),
+                    task="qa",
+                    prompt="只输出 OK",
+                    prefer_free=False,
+                    paid_fallback=True,
+                    max_cost_usd=0.01,
+                    max_output_tokens=8,
+                    thinking_mode="disabled",
+                    final_answer_reserve_tokens=8,
+                    privacy="external_allowed",
+                )
+
+        self.assertEqual(result.provider, "minimax-frontier-paid")
+        self.assertEqual(result.model, "MiniMax-M3")
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args.kwargs["thinking"], {"type": "disabled"})
+        self.assertEqual(call.call_args.kwargs["max_tokens"], 8)
+
+    def test_golden_evaluation_can_call_exact_unqualified_role_candidate(self) -> None:
+        provider = LLMProvider(
+            "openrouter-free",
+            "https://openrouter.test/v1",
+            "OPENROUTER_KEY",
+            ("new/strong-model:free",),
+            True,
+            1,
+            "permanent_free",
+        )
+        settings = self._settings((provider,))
+        with patch.dict(
+            os.environ,
+            {"OPENROUTER_KEY": "test", "SMART_LLM_CACHE": "false"},
+            clear=True,
+        ):
+            with patch("smart_llm_router.router._call_openai_compatible", return_value=('{"decision":"pass"}', {})):
+                with self.assertRaisesRegex(RuntimeError, "最低质量档"):
+                    run_llm_task(
+                        settings,
+                        task="audit",
+                        prompt="审计公开方案",
+                        quality_target="draft",
+                        privacy="external_allowed",
+                    )
+                evaluated = run_llm_task(
+                    settings,
+                    task="audit",
+                    prompt="审计公开方案",
+                    provider="openrouter-free",
+                    model="new/strong-model:free",
+                    quality_target="draft",
+                    privacy="external_allowed",
+                    allow_unqualified_explicit_route=True,
+                )
+
+        self.assertEqual(evaluated.model, "new/strong-model:free")
 
     def test_privacy_gate_blocks_sensitive_external_call(self) -> None:
         provider = LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "KEY", ("deepseek-v4-pro",), False, 1, "paid")
@@ -317,6 +466,7 @@ class RoleRoutingTests(unittest.TestCase):
                         task="draft",
                         prompt="执行任务",
                         prefer_free=False,
+                        paid_fallback=True,
                         max_cost_usd=1.0,
                     )
         call.assert_not_called()

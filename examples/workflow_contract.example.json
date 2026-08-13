@@ -1,16 +1,41 @@
 {
-  "schema": "hermes_router_hub.workflow_contract.v1",
-  "workflow_id": "wf-smart-router-v1",
-  "objective": "完成一项可验收、可回退且不偏离主目标的智能路由升级",
+  "schema": "hermes_router_hub.workflow_contract.v2",
+  "workflow_id": "wf-smart-router-v2",
+  "objective": "完成一项可验收、可回退且不偏离主目标的复杂智能路由升级",
   "task_type": "execute",
-  "domain": "general",
+  "domain": "software",
   "risk": "high",
+  "complexity_tier": "complex",
   "quality_target": "frontier",
   "privacy": "external_allowed",
   "paid_allowed": true,
-  "workflow_budget_usd": 0.05,
-  "max_stage_cost_usd": 0.02,
+  "workspace_execution_required": true,
+  "workspace_planner": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "xhigh"
+  },
+  "research_required": true,
+  "research_sources": [
+    {
+      "title": "OpenAI model guidance",
+      "url": "https://developers.openai.com/api/docs/guides/latest-model",
+      "accessed_at": "2026-08-02"
+    },
+    {
+      "title": "NIST AI RMF Core",
+      "url": "https://airc.nist.gov/airmf-resources/airmf/5-sec-core/",
+      "accessed_at": "2026-08-02"
+    }
+  ],
+  "budget_policy": {
+    "soft_target_usd": 0.03,
+    "elastic_limit_usd": 0.10,
+    "anomaly_hard_limit_usd": 0.25,
+    "max_stage_cost_usd": 0.03
+  },
   "max_conditional_checks": 1,
+  "max_plan_repair_loops": 1,
+  "max_result_repair_loops": 1,
   "automation_mode": "manual_controlled",
   "hermes_security_approved": false,
   "success_criteria": [
@@ -24,20 +49,21 @@
     },
     {
       "id": "budget",
-      "text": "累计模型成本不超过工作流预算"
+      "text": "外部成本留在已授权弹性上限内"
     },
     {
       "id": "security",
-      "text": "没有绕过隐私门、人工控制和 Hermes 安全硬停止"
+      "text": "没有绕过隐私、凭据、破坏性操作和无人值守安全硬门"
     }
   ],
   "constraints": [
     "规划审查通过前不得执行",
     "范围变化必须先进入过程检查点",
-    "最终交付前必须从原始目标独立复验"
+    "最终交付前必须从原始目标独立复验",
+    "局部整改只允许一次，根本性设计错误返回Sol"
   ],
   "non_goals": [
-    "不自动开启 Hermes 无人值守调度",
-    "不在本阶段替换 Hermes 内部会话模型"
+    "不自动开启Hermes无人值守调度",
+    "不在路由器内冒充调用Codex订阅模型"
   ]
 }

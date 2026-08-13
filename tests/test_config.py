@@ -8,6 +8,29 @@ from smart_llm_router.config import load_settings
 
 
 class ConfigTests(unittest.TestCase):
+    def test_stale_environment_catalog_is_reported_without_blocking_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "moved-catalog.txt"
+            with patch.dict(
+                os.environ,
+                {"SMART_LLM_CREDENTIAL_CATALOG": str(missing)},
+                clear=True,
+            ):
+                settings = load_settings()
+
+        self.assertIsNone(settings.credential_catalog)
+        self.assertEqual(
+            settings.configuration_warnings,
+            (f"credential_catalog_missing:{missing}",),
+        )
+
+    def test_missing_explicit_catalog_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "missing-catalog.txt"
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(FileNotFoundError, "credential catalog not found"):
+                    load_settings(credential_catalog=str(missing))
+
     def test_process_environment_overrides_env_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             env_file = Path(tmp) / ".env"
@@ -48,6 +71,25 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.discovery_limit, 20)
             self.assertEqual(settings.health_ttl_hours, 1.0)
 
+    def test_budget_authority_does_not_follow_runtime_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.dict(
+                os.environ,
+                {"HOME": str(root), "SMART_LLM_RUNTIME_DIR": str(root / "runtime-a")},
+                clear=True,
+            ):
+                first = load_settings()
+            with patch.dict(
+                os.environ,
+                {"HOME": str(root), "SMART_LLM_RUNTIME_DIR": str(root / "runtime-b")},
+                clear=True,
+            ):
+                second = load_settings()
+        self.assertNotEqual(first.data_dir, second.data_dir)
+        self.assertEqual(first.budget_authority_dir, second.budget_authority_dir)
+        self.assertEqual(first.budget_authority_dir, root / ".smart-llm-router" / "budget-authority")
+
     def test_paid_keys_register_supported_provider_modes_and_free_gemini(self) -> None:
         with patch.dict(
             os.environ,
@@ -58,6 +100,7 @@ class ConfigTests(unittest.TestCase):
                 "KIMI_API_KEY": "test",
                 "GEMINI_API_KEY": "test",
                 "ARK_API_KEY": "test",
+                "MINIMAX_API_KEY": "test",
             },
             clear=True,
         ):
@@ -75,6 +118,10 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("gemini-free", names)
         self.assertNotIn("gemini-frontier-paid", names)
         self.assertIn("doubao-frontier-paid", names)
+        self.assertIn("minimax-frontier-paid", names)
+        minimax = next(provider for provider in settings.providers if provider.name == "minimax-frontier-paid")
+        self.assertFalse(minimax.free)
+        self.assertEqual(minimax.billing_class, "paid")
 
     def test_gemini_paid_provider_requires_explicit_billing_opt_in(self) -> None:
         with patch.dict(
@@ -119,7 +166,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(provider.billing_class, "trial_quota")
         self.assertFalse(provider.trial_quota_guarded)
 
-    def test_trial_quota_guard_requires_explicit_provider_opt_in(self) -> None:
+    @patch("smart_llm_router.config.load_dotenv")
+    def test_trial_quota_guard_requires_explicit_provider_opt_in(self, _load_dotenv: object) -> None:
         base = {
             "DASHSCOPE_API_KEY": "test",
             "SMART_LLM1_NAME": "qwen-free",

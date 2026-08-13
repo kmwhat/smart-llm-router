@@ -1,6 +1,6 @@
 ---
 name: smart-llm-router
-description: Use when a task should route across free, low-cost, and frontier LLMs by role, modality, privacy, quality, and budget. Supports planning, execution, audit, independent verification, quality enhancement, text, vision/OCR, ASR, embedding, rerank, and provider discovery across DeepSeek, Qwen, GLM, Kimi, Gemini, Doubao/Ark, OpenRouter, NVIDIA, and Groq.
+description: Use when a task should route across free, low-cost, and frontier LLMs by role, modality, privacy, quality, and budget. Supports planning, execution, audit, independent verification, quality enhancement, text, vision/OCR, ASR, embedding, rerank, and provider discovery across DeepSeek, Qwen, GLM, Kimi, MiniMax, Gemini, Doubao/Ark, OpenRouter, NVIDIA, and Groq.
 metadata:
   short-description: Cost-aware free-pool LLM routing
 ---
@@ -8,6 +8,16 @@ metadata:
 # Smart LLM Router
 
 Use the standalone router instead of calling provider APIs directly when the user wants low-cost model execution, free-pool fallback, paid low-cost fallback, model health checks, or portable routing across computers.
+
+## Outcome-First Governed Workflow
+
+Choose the smallest sufficient workflow before selecting providers:
+
+- `simple`: Codex Terra or the cheapest qualified executor, deterministic checks, and escalation only on failure or uncertainty.
+- `standard`: Codex GPT-5.6 Sol planning, optional sourced research enhancement, independent plan audit, economical execution, and independent final verification.
+- `complex`: Codex GPT-5.6 Sol high/xhigh planning; a URL-and-date source pack; Qwen-Max research enhancement; DeepSeek plan challenge audit; cheapest-qualified delta repair; the original auditor's delta verification; economical execution; deterministic checkpoints; full independent final verification; delta repair and closeout.
+
+Codex subscription stages are controller declarations. The router must never claim that a provider API call invoked the user's Codex subscription model. Use `workflow_contract.v2` to record the controller model, reasoning effort, source provenance, repair limits, and soft/elastic/anomaly-hard budget policy.
 
 ## Locate the Router
 
@@ -28,6 +38,7 @@ the project `.env` by default or `SMART_LLM_ENV_FILE` when set, and never prints
 ```bash
 smart-llm-router providers
 smart-llm-router capabilities --configured-only
+smart-llm-router doctor --quality-target production
 smart-llm-router refresh --timeout 6 --limit 5
 ```
 
@@ -48,6 +59,11 @@ roles require benchmark evidence and an explicit quality-band entry before promo
 smart-llm-router refresh --timeout 6 --limit 8
 smart-llm-router refresh-modalities --timeout 6 --limit 2
 ```
+
+`doctor` is offline and explains configuration drift, billing class, role
+coverage, key rotations, and important exclusion reasons. `refresh` is a live
+health probe: it emits progress to stderr and atomically checkpoints a
+resumable JSON report after each model.
 
 4. Inspect or clear cooldowns:
 
@@ -70,7 +86,12 @@ smart-llm-router workflow-check /path/to/workflow-contract.json /path/to/checkpo
 
 ```bash
 smart-llm-router task "Return OK" --task qa --free-only
+smart-llm-router task "Audit this public plan" --task audit --paid --max-cost-usd 0.01 --privacy external_allowed
 ```
+
+All executing commands default to no paid authorization. `task --paid` requires
+an explicit `--max-cost-usd`; omitting either causes a local fail-closed result
+before any provider request.
 
 7. Review the cost ledger and task-specific route health:
 
@@ -101,30 +122,65 @@ role's suite to promote another role.
 
 Default behavior:
 
-- Treat `quality_target` as a minimum role-quality floor: `draft=2`, `production=3`, `audit=4`, and `frontier=4`. Reject lower or unregistered role models. Among qualified routes, order by empirical degradation, budget eligibility, free status, retry-adjusted expected cost, successful-call P95 latency, quality surplus, stable role order, and provider priority. If no route meets the floor, fail closed instead of using the general pool.
+- Let task complexity and risk determine the required `quality_target`; planning is not required to use a free model. Treat `draft=2`, `production=3`, `audit=4`, and `frontier=4` as minimum role-quality floors and reject lower or unregistered models.
+- Among routes that meet the required capability floor, order by empirical degradation, budget eligibility, retry-adjusted expected total monetary cost, successful-call P95 latency, and stable tie-breakers. Free is not a separate quality preference: it wins only when its zero price survives the same quality, reliability, privacy, and quota gates.
 - For non-trivial production work, prevent rework before optimizing token price: freeze the objective and measurable success criteria, audit the plan independently, execute one approved stage, checkpoint drift and evidence, then independently verify the final result against the original objective.
 - Use `workflow-plan` for the complete local dry-run and cumulative budget ceiling. Use `workflow-check` after scope changes, meaningful milestones, failures, and final delivery. A `verify_required` or `stop` decision must not be silently overridden.
 - Use one selected main model per stage. Planning and execution do not run ensembles; plan audit and final verification are separate governance gates.
-- Use explicit production roles: Qwen/Kimi for planning, GLM/DeepSeek for execution, Gemini Free Tier/DeepSeek/Qwen for audit, a family different from execution for verification, and conditional Kimi/Qwen quality enhancement.
-- Treat same-model key rotation as availability failover only. Plan audit must differ from planning, and final verification must differ from execution; the five roles do not require five unique providers.
+- For complex governed work, use Sol/OpenAI for workspace planning, Qwen-Max for sourced research enhancement, DeepSeek for independent plan challenge audit, the cheapest qualified execution route, and a final verifier independent from execution. Flash-0731 cannot replace V4-Pro until the current endpoint passes the matching role golden gate.
+- Treat same-model key rotation as availability failover only. Plan audit must differ from planning and research enhancement, final verification must differ from execution, and delta verification must reuse the corresponding original auditor.
 - Distinguish `permanent_free`, `trial_quota`, and `paid`; Qwen, NVIDIA, and Ark trial resources are not permanent-free promises.
+- Treat MiniMax China `MiniMax-M3` and `MiniMax-M2.7` as paid text routes. They require explicit paid authorization and a cost ceiling, and remain outside production role bands until matching golden gates pass.
+- Treat paid permission as an execution capability, not a ranking preference. A
+  plan may list paid candidates, but `task` may execute them only with both
+  `--paid` and `--max-cost-usd`. Programmatic callers must set
+  `paid_fallback=True` explicitly.
+- Never infer `trial_quota_guarded=true` from an API success or a reported zero-cost response. Confirm the provider-side hard stop separately; otherwise keep the route blocked for ordinary execution.
+- A golden-set pass qualifies a candidate for review; it does not override billing, privacy, budget, or independent-audit gates and never promotes the route automatically.
 - Fail closed when a route claims free while using `trial_quota`. Set that provider block's
   `SMART_LLM<n>_TRIAL_QUOTA_GUARDED=true` only after verifying current remaining
   free quota and a hard stop that prevents paid overage.
 - Use `--privacy auto|local_only|external_allowed`; private images, chat records, identity data, and raw private media fail closed unless external upload is explicitly allowed.
-- Use `--max-cost-usd` for a hard task budget. Unknown paid prices fail closed when a budget is present.
+- Use `--max-cost-usd` for every paid call. In workflow v2, exceeding the soft target only warns; execution may continue inside the pre-authorized elastic limit, while the anomaly hard limit remains fail-closed. Unknown paid prices still fail closed.
 - If a model fails with 429, timeout, 403/404, or empty content, mark it in cooldown and skip it next time.
-- If the free pool appears fully cooled down, run a light refresh before using paid fallback.
+- If the free pool appears fully cooled down, run a light refresh; do not enter
+  a paid fallback until the current task has explicit paid authorization and a
+  hard cost limit.
 - Diagnose free remote routes in three separate layers: public/authenticated catalog discovery,
   `credential-status` authentication evidence, and a fresh `refresh` or `task` runtime probe.
   Never treat OpenRouter or NVIDIA public catalog HTTP 200 as credential validation.
   NVIDIA empty-request HTTP 400/422 is request-validation evidence only and
   remains `indeterminate`; it is not accepted-credential evidence.
-- Prefer `refresh-modalities` for important checks; it probes text, vision/OCR, transcript correction, and code routes separately instead of treating a generic QA success as global health.
+- Prefer `refresh-modalities` for important checks; it probes text, vision/OCR, transcript correction, and code routes separately instead of treating a generic QA success as global health. It excludes unprotected trial routes unless `--include-unprotected-trial` is explicitly used for an authorized audit.
 - The public template keeps Gemini in free-tier mode. Suppress paid Gemini unless `SMART_LLM_GEMINI_PAID_ENABLED=true`; use its free tier only for public, non-sensitive inputs because quota is restricted and free-tier content may be used for product improvement.
 - Role routing is quality-and-cost aware across DeepSeek V4, Qwen 3.7, GLM-5.2, Kimi K3, Gemini Free Tier, and Doubao Seed 2.1/2.0. A public model name is only a candidate until its current endpoint passes a live probe.
-- Simple tasks are scored locally and default to free-only behavior.
+- DeepSeek-V4-Flash-0731 is a known low-cost candidate, not a promoted role model. The 2026-08-02 NVIDIA planning gate passed two cases and then returned 529, so keep it `pending_role_golden_gate` until a complete role-matched run passes.
+- All ordinary tasks default to no paid authorization; complexity controls the
+  quality floor, not permission to spend.
 - Repeated identical requests can hit the local response cache.
+- Governed external calls should add `--strict-controls`; unsupported or
+  misspelled `SMART_LLM` controls fail closed before routing, paid reservation,
+  or provider send. Use `--no-cache` for an explicit request-scoped no-read,
+  no-write cache path; the supported environment control is
+  `SMART_LLM_CACHE=false`, not `SMART_LLM_CACHE_ENABLED=false`.
+- For an OpenRouter call that requires an exact upstream or privacy policy, use
+  `--openrouter-upstream-provider <slug>` (repeatable),
+  `--openrouter-no-fallbacks`, `--openrouter-require-zdr`, and optionally
+  `--openrouter-deny-data-collection`. These controls fail closed before send
+  if no OpenRouter route remains. Governed JSON Schema requests are sent as
+  strict structured output with provider parameter support required, then
+  validated again locally. The local validator accepts only its documented,
+  dependency-free JSON Schema 2020-12 subset: types, const/enum, object/array/string
+  bounds, numeric bounds, properties/required/additionalProperties, items/uniqueItems,
+  and allOf/anyOf/oneOf/not. Unsupported keywords or dialects, depth/node overflow,
+  malformed schemas, non-finite JSON numbers, and duplicate object keys fail closed.
+  An OpenRouter 400/404/422/503 bypasses generic cooldown only when request controls
+  were applied and its structured error message explicitly identifies the matching
+  ZDR/data/provider/structured-output constraint; status alone never grants the bypass.
+  Ordinary model, credential, quota, timeout, and transport failures still enter cooldown.
+- Read `doctor.configuration.runtime_dir_source` before comparing health runs.
+  `temporary_fallback` means the current environment could not write the
+  persistent user-state directory; `status` then describes only that ledger.
 - Each call writes a local JSONL ledger row with model, estimated tokens, latency, cache/failure status, and estimated cost when pricing is configured.
 - `route-stats` derives per-task route health from that ledger. It requires at least three health samples before marking a route degraded and excludes clear local DNS/network infrastructure failures from the health denominator.
 - API success proves endpoint health, not answer quality. Never promote a discovered model into a production role from health history alone; require task probes, a task-specific golden set, and explicit quality-band registration.
@@ -134,17 +190,19 @@ Default behavior:
 - `groq-free/openai/gpt-oss-120b` passed the 2026-07-18 public verification gate and is explicitly registered at `verify` band 2. Treat it as `trial_quota`, use it only for public low-risk draft verification, and keep band 3/4 models ahead for higher-risk work.
 - Use local retrieval before long context calls so only the most relevant snippets go to the model.
 - Vision tasks support local `--image` paths and dynamic failover across free vision models. A failed free vision model enters cooldown and the router immediately tries the next configured vision model.
-- Use `route-plan` before production or multimodal work. It prints a local task descriptor, modality requirements, local preprocessing steps, free pool, low-cost paid fallback, second-model cross-check, and Codex audit boundary. `embed` and `rerank` use dedicated adapters; image/video generation and ASR/TTS still require dedicated adapters before direct execution.
-- The five roles are governance stages, not a requirement to call five models for every task. Process checkpoints are local by default; quality enhancement is conditional and runs only after a verified quality gap.
+- Use `route-plan` before production or multimodal work. It prints a local task descriptor, modality requirements, local preprocessing steps, free pool, candidate paid fallback, second-model cross-check, and Codex audit boundary without granting execution permission. `embed`, `rerank`, remote ASR, and image generation use dedicated adapters and require their own explicit paid switches before a billable route may run.
+- Governed roles are not a requirement to call every model for every task. Complexity selects the stage graph; process checkpoints are local by default, repair is bounded, and delta verification reuses the original auditor.
 - Use `capabilities` to inspect provider-family model modes, including text, vision/OCR, ASR/TTS, image/video generation, embedding, rerank, and code coverage. It separates known API-key capability from currently configured/probed executable model routes, and does not print API keys.
 - Treat raw `rerank` scores as provider-specific relative ordering signals, not universal absolute relevance thresholds. For production knowledge retrieval, combine rank, top-k, source type, term hits, and second evidence checks.
-- Current production hot path: `embed` defaults to Qwen `text-embedding-v4`, then Zhipu `embedding-3`; `rerank` defaults to Zhipu `rerank`. Qwen `gte-rerank` has a reserved DashScope adapter path but should stay disabled until account/service permission passes `refresh-modalities`.
-- Use `transcript-correct` for long-form ASR correction. It chunks the transcript, applies deterministic cleanup, routes correction through low-cost models, optionally cross-checks, and writes corrected/report artifacts to disk.
+- Current production candidate path: `embed` prefers Qwen `text-embedding-v4`, then Zhipu `embedding-3`; `rerank` prefers Zhipu `rerank`, but both commands remain blocked until `--allow-paid` is explicit. Qwen `gte-rerank` has a reserved DashScope adapter path but should stay disabled until account/service permission passes `refresh-modalities`.
+- Use `transcript-correct` for long-form ASR correction. It chunks the transcript, applies deterministic cleanup, optionally cross-checks, and writes corrected/report artifacts to disk. Paid main correction requires `--paid-main --max-cost-usd`; the cross-check never inherits that paid permission.
 - For long transcripts, Codex should only orchestrate and audit; it should not ingest the whole raw transcript.
 - Keep Volcano Ark online inference, Coding Plan, and endpoint ids separate. Their base URLs, model names, quotas, and billing paths are not interchangeable. Treat all configured model names as account-scoped candidates until discovery and task probes succeed.
 
 Task defaults from the latest benchmark:
 
+- `research_enhance`: Qwen 3.7 Max first, with sourced evidence and explicit change tracking.
+- `plan_audit`: DeepSeek V4 Pro until Flash-0731 passes a complete current-endpoint audit gate.
 - `classify`: OpenRouter DeepSeek free first.
 - `clean`: Qwen first, then stable NVIDIA/Gemma candidates.
 - `qa`: NVIDIA Nemotron Super first.
@@ -177,6 +235,18 @@ Valid billing classes are `local`, `permanent_free`, `trial_quota`, and `paid`.
 The portable launcher stores state under `SMART_LLM_RUNTIME_DIR` or the standard
 user state directory. An optional credential catalog is loaded only when
 `SMART_LLM_CREDENTIAL_CATALOG` is explicitly set.
+When that catalog has `付费模型`, `免费模型`, and `付费未充值模型`
+sections, only funded paid and free sections are admitted. The unfunded paid
+section is diagnostic-only and never populates executable key slots.
+Paid workflow budgets use the separate canonical authority at
+`$HOME/.smart-llm-router/budget-authority`; changing `SMART_LLM_RUNTIME_DIR`
+must never reset cumulative workflow spend.
+Before the first paid reservation for an existing workflow, conservatively
+import any standard-runtime v1 budget state into the canonical authority. Keep
+status, limits, spend, reservations, incidents, and timestamps; ambiguous or
+conflicting sources must fail closed with a migration receipt.
+Treat every budget amount as valid only when it is finite; reject NaN and
+positive or negative Infinity before migration, reservation, or settlement.
 
 ## Validation
 

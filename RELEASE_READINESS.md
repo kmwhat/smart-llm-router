@@ -1,5 +1,112 @@
 # Public Release Readiness
 
+## 0.9.0 Stable Release — 2026-08-11
+
+Status: stable artifact identity frozen. Protected pull request, CI, tag,
+publication, registry acceptance, and runtime projection are separately evidenced;
+this repository document does not by itself assert that those external gates ran.
+
+- Package metadata, runtime version, README, changelog, CLI, and the canonical
+  GitHub wheel URL all identify `0.9.0`.
+- The stable release changes release metadata only; provider routes, production role
+  quality bands, privacy policy, paid authorization, and task descriptor defaults
+  are unchanged from the accepted 0.9.0rc3 source.
+- The portable launcher retains the verified source-binding repair while
+  preserving caller working-directory and relative-path behavior.
+- MiniMax remains an explicitly authorized paid text fallback without governed
+  role-quality promotion. DeepSeek V4 Flash remains pending its role-matched
+  audit-quality gates.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+- Provider calls, tag creation, publication, accepted-registry changes, and
+  Codex/Hermes runtime projection remain outside repository-content assertions.
+
+## 0.9.0rc3 MiniMax Paid Route and Sectioned Catalog Candidate — 2026-08-11
+
+Status: local release candidate only. Protected pull request, CI, tag,
+publication, registry acceptance, and runtime projection remain separately gated.
+
+- Package metadata, runtime version, README, changelog, and CLI report
+  `0.9.0rc3` without claiming a public wheel, tag, or GitHub Release.
+- MiniMax China-region `MiniMax-M3` and `MiniMax-M2.7` are paid text candidates
+  that require explicit paid authorization and a finite per-call cost ceiling.
+- MiniMax has no `plan`, `audit`, `verify`, or other governed role-quality band;
+  health and budget evidence cannot substitute for a role-matched golden gate.
+- Section-aware credential catalogs admit funded paid and free sections only.
+  Unfunded paid entries are excluded from executable slots and reported only as
+  sanitized aggregate counts; legacy unsectioned catalogs remain compatible.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+- Further provider calls, role-table changes, publication, accepted-registry
+  changes, and Codex/Hermes runtime projection remain outside this candidate gate.
+
+## 0.9.0rc2 NVIDIA DeepSeek V4 Adapter Candidate — 2026-08-10
+
+Status: clean local version candidate and full validation are required before
+protected pull request, CI, tag, publication, registry acceptance, or runtime
+projection.
+
+- Package metadata, runtime version, README, changelog, and CLI report
+  `0.9.0rc2` without claiming a public wheel, tag, or GitHub Release.
+- NVIDIA-hosted DeepSeek V4 uses the provider's official
+  `chat_template_kwargs` thinking controls; direct DeepSeek behavior is
+  unchanged.
+- Returned model metadata is bounded and validated; malformed or
+  non-equivalent model substitution fails closed.
+- The reviewed `deepseek-v4-flash-0731` aliases remain
+  `pending_role_golden_gate`, with no `audit` or `plan_audit` quality band.
+- The existing public `v0.9.0rc1` tag and prerelease remain immutable history;
+  this candidate may use only a new `v0.9.0rc2` tag after all later gates pass.
+- Provider calls, paid fallback, role-table changes, publication,
+  accepted-registry changes, OCR consumption, and Codex/Hermes runtime
+  projection remain outside this candidate gate.
+
+## 0.9.0rc1 OpenRouter Policy and Structured Output Candidate — 2026-08-07
+
+Status: clean canonical candidate commit and local validation are required before
+protected pull request, CI, tag, publication, registry acceptance, or runtime projection.
+
+- Package metadata, runtime version, README, changelog, and CLI report `0.9.0rc1`
+  without claiming a public wheel, tag, or GitHub Release.
+- OpenRouter requests can pin one or more upstream provider slugs, disable provider
+  fallback, require Zero Data Retention, and deny data collection per request.
+- Governed JSON Schema requests use strict upstream structured-output controls and
+  retain a bounded, dependency-free local validation boundary.
+- Unsupported schemas, non-finite JSON, duplicate keys, malformed structured output,
+  and non-OpenRouter routes with OpenRouter-only controls fail closed before consumption.
+- A policy-specific provider failure avoids generic route cooldown only when its
+  sanitized structured error explicitly identifies an applied request constraint.
+- Portable-launcher diagnostics expose persistent, explicit, or temporary-fallback
+  runtime provenance so separate ledgers are not confused.
+- Tests and evidence use synthetic inputs only; no private source material, credential,
+  provider response, or domain-specific OCR content is included in this candidate.
+- Provider calls, paid fallback, tag creation, publication, accepted-registry changes,
+  OCR adapter consumption, and Codex/Hermes runtime projection remain outside this gate.
+
+## 0.8.4 Guarded Budget and Strict Controls Candidate — 2026-08-05
+
+Status: publication remains gated by a protected pull request, successful CI,
+exact merged-main verification, and separate tag/release authorization.
+
+- Package metadata, runtime version, and changelog report `0.8.4` without
+  claiming that a matching public wheel already exists.
+- Governed structured-output calls fail closed on malformed, fenced,
+  truncated, or schema-invalid JSON and never cache rejected output.
+- Strict-control preflight and request-scoped no-cache handling occur before
+  route selection, budget reservation, cache mutation, or provider send.
+- Paid input-token forecasts apply deterministic conservative guards;
+  non-finite cost ceilings are rejected before settings or external effects.
+- Workflow budgets use one stable user-level authority and preserve
+  reservations and liability when settlement crosses a hard boundary.
+- The public launcher uses only explicit environment variables and portable
+  defaults; it does not search machine-specific credential-catalog paths.
+- Public source and documentation contain no credential values, local catalog
+  filenames, personal absolute paths, runtime ledgers, caches, or backups.
+- The complete source suite passes 226 tests, bytecode compilation,
+  diff-format validation, public-boundary checks, and Gitleaks.
+- Provider calls, paid calls, production role-table changes, and automatic
+  task-descriptor-v2 activation remain outside this candidate gate.
+
 ## 0.7.0 Free-Route and Local-Fallback Candidate — 2026-07-31
 
 Status: protected PR #15 and post-merge main CI complete; this snapshot is

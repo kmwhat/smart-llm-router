@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from .credential_catalog import CredentialCatalogSummary, load_model_credential_catalog
+
+
+def default_budget_authority_dir() -> Path:
+    return Path.home() / ".smart-llm-router" / "budget-authority"
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,12 @@ class Settings:
     discovery_limit: int = 20
     health_ttl_hours: float = 1.0
     credential_catalog: CredentialCatalogSummary | None = None
+    configuration_warnings: tuple[str, ...] = ()
+    budget_authority_dir: Path = field(default_factory=default_budget_authority_dir)
+    legacy_budget_dirs: tuple[Path, ...] = ()
+    runtime_dir_source: str = "direct_config"
+    runtime_fallback_reason: str | None = None
+    runtime_expected_dir: Path | None = None
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -128,6 +138,7 @@ def _load_providers() -> tuple[LLMProvider, ...]:
         )
     )
     automatic = (
+        LLMProvider("minimax-frontier-paid", "https://api.minimaxi.com/v1", "MINIMAX_API_KEY", ("MiniMax-M3", "MiniMax-M2.7"), False, 7, "paid"),
         LLMProvider("deepseek-direct-paid", "https://api.deepseek.com", "DEEPSEEK_API_KEY", ("deepseek-v4-flash", "deepseek-v4-pro"), False, 7, "paid"),
         LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", ("qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"), False, 7, "paid"),
         LLMProvider("kimi-frontier-paid", "https://api.moonshot.cn/v1", "KIMI_API_KEY", ("kimi-k3", "kimi-k2.6"), False, 7, "paid"),
@@ -198,9 +209,23 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
     else:
         load_dotenv(override=False)
     catalog_summary = None
-    catalog_path = credential_catalog or os.getenv("SMART_LLM_CREDENTIAL_CATALOG", "").strip()
+    configuration_warnings: list[str] = []
+    explicit_catalog = (credential_catalog or "").strip()
+    environment_catalog = os.getenv("SMART_LLM_CREDENTIAL_CATALOG", "").strip()
+    catalog_path = explicit_catalog or environment_catalog
     if catalog_path:
-        catalog_summary = load_model_credential_catalog(catalog_path, override=True)
+        resolved_catalog = Path(catalog_path).expanduser()
+        if resolved_catalog.is_file():
+            catalog_summary = load_model_credential_catalog(resolved_catalog, override=True)
+        elif explicit_catalog:
+            # An explicit CLI path is an operator assertion, so keep failing
+            # closed. A stale path inherited from an env file is recoverable
+            # configuration drift and must not break offline diagnostics.
+            raise FileNotFoundError(f"credential catalog not found: {resolved_catalog}")
+        else:
+            configuration_warnings.append(
+                f"credential_catalog_missing:{resolved_catalog}"
+            )
     default_dir = Path.home() / ".smart-llm-router"
     # Runtime placement is a governance concern, not a secret. Let the global
     # launcher override legacy env-file locations without changing key loading.
@@ -209,6 +234,34 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
         or os.getenv("SMART_LLM_DATA_DIR")
         or str(default_dir)
     ).expanduser()
+    runtime_dir_source = os.getenv("SMART_LLM_RUNTIME_DIR_SOURCE", "").strip()
+    if not runtime_dir_source:
+        runtime_dir_source = (
+            "runtime_environment"
+            if os.getenv("SMART_LLM_RUNTIME_DIR")
+            else "legacy_data_environment"
+            if os.getenv("SMART_LLM_DATA_DIR")
+            else "default_home"
+        )
+    runtime_fallback_reason = os.getenv("SMART_LLM_RUNTIME_FALLBACK_REASON", "").strip() or None
+    runtime_expected_raw = os.getenv("SMART_LLM_RUNTIME_EXPECTED_DIR", "").strip()
+    runtime_expected_dir = Path(runtime_expected_raw).expanduser() if runtime_expected_raw else None
+    # Paid workflow budgets must not follow SMART_LLM_RUNTIME_DIR. That runtime
+    # may be isolated for cooldown/cache testing, while the authority remains a
+    # single durable user-level source of truth.
+    budget_authority_dir = default_budget_authority_dir()
+    default_state_home = Path.home() / ".local" / "state"
+    state_home = Path(os.getenv("XDG_STATE_HOME") or default_state_home)
+    legacy_budget_dirs = tuple(dict.fromkeys(
+        path
+        for path in (
+            data_dir,
+            default_dir,
+            default_state_home / "smart-llm-router",
+            state_home / "smart-llm-router",
+        )
+        if path != budget_authority_dir
+    ))
     timeout = float(os.getenv("SMART_LLM_TIMEOUT") or "45")
     refresh_timeout = float(os.getenv("SMART_LLM_EMPTY_POOL_REFRESH_TIMEOUT", "5") or "5")
     refresh_limit = int(os.getenv("SMART_LLM_EMPTY_POOL_REFRESH_LIMIT", "8") or "8")
@@ -226,4 +279,10 @@ def load_settings(env_file: str | None = None, credential_catalog: str | None = 
         discovery_limit=max(1, discovery_limit),
         health_ttl_hours=max(0.0, health_ttl_hours),
         credential_catalog=catalog_summary,
+        configuration_warnings=tuple(configuration_warnings),
+        budget_authority_dir=budget_authority_dir,
+        legacy_budget_dirs=legacy_budget_dirs,
+        runtime_dir_source=runtime_dir_source,
+        runtime_fallback_reason=runtime_fallback_reason,
+        runtime_expected_dir=runtime_expected_dir,
     )

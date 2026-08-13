@@ -3,16 +3,39 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.7.0 stable candidate adds policy-aware cache revalidation, explicit
+The 0.9.0 stable release consolidates the budget-guarded China-region MiniMax paid
+text route and section-aware credential-catalog loading that excludes unfunded
+paid credentials from executable slots. MiniMax has no production role-quality
+promotion in this release. It includes the 0.9.0rc3 launcher source-isolation
+repair, the 0.9.0rc2 NVIDIA-hosted DeepSeek V4
+request compatibility and served-model identity validation, plus the 0.9.0rc1
+request-scoped OpenRouter upstream controls, fail-closed
+Zero Data Retention and data-collection policy enforcement, strict structured-output
+transport plus bounded local validation, and explicit runtime provenance. It
+preserves the 0.8.4 conservative paid input-token forecast guarding
+and auditable budget evidence together with governed strict-control preflight,
+explicit request-scoped no-cache behavior, and sanitized cache-state evidence on
+top of the 0.8.2 DeepSeek thinking-mode control, fail-closed final-answer
+reservation, and cache isolation, the 0.8.1 Qwen and budget reconciliation
+fixes, and the 0.8.0 outcome-first, difficulty-tiered workflows with Codex
+subscription planning declarations, Qwen research enhancement, DeepSeek
+independent plan audit, bounded low-cost repair loops, delta verification, and elastic budgets,
+cumulative workflow hard budgets, durable overrun incidents, policy-aware cache revalidation, explicit
 free-route health and credential semantics, safe NVIDIA discovery, local
 Ollama compatibility, and optional whisper.cpp no-GPU execution on top of
 credential-catalog hardening, the controlled task descriptor v2,
 strict JSON output validation, and evidence-backed task contracts,
-adapter lifecycle governance, goal-locked workflow planning, quality-band free-first role routing,
+adapter lifecycle governance, goal-locked workflow planning, complexity-driven quality floors and expected-total-cost role routing,
 ledger-derived route health, golden-set promotion gates, multimodal provider registration, privacy and per-call/workflow budget gates, built-in list-price estimates, and safe
 loading from an optional credential catalog selected with
 `SMART_LLM_CREDENTIAL_CATALOG`. Secret values remain local and in process
 memory; provider/status output never prints them.
+
+Sectioned credential catalogs may use `付费模型`, `免费模型`, and
+`付费未充值模型` headings. Only the first two sections are admitted;
+unfunded paid credentials are counted for sanitized diagnostics but are never
+loaded into executable environment slots. Legacy unsectioned catalogs remain
+compatible.
 
 The July 7 Hermes Router Hub skillpack is treated as a governance protocol, not
 as a replacement for this router's real provider adapters. Its dry-run server
@@ -53,7 +76,7 @@ smart-llm-router workflow-plan examples/workflow_contract.example.json
 当声明位于当前运行目录的 `adapter-lifecycle/adapters` 时，已声明路线只有
 `qualified` 或 `production` 才进入实际推荐和执行池；未纳入生命周期的旧路线保持兼容。
 
-一个可移植的智能模型路由器：按任务和模态做成本/质量路由，免费池优先但不盲目免费，失败冷却、主动探活、低价付费兜底。适合给多个智能体、脚本、知识库项目复用。
+一个可移植的智能模型路由器：按任务和模态做成本/质量路由，免费池优先但不盲目免费，失败冷却、主动探活，付费路线必须逐任务显式授权。适合给多个智能体、脚本、知识库项目复用。
 
 源码可以放在任意工作目录。未显式设置 `SMART_LLM_RUNTIME_DIR` 时，
 便携启动器优先使用：
@@ -63,13 +86,27 @@ $XDG_STATE_HOME/smart-llm-router
 $HOME/.local/state/smart-llm-router
 ```
 
+缓存、冷却和普通账本跟随该运行目录；付费 workflow 的累计预算不跟随它。
+预算由 `$HOME/.smart-llm-router/budget-authority` 统一管理，并以稳定的
+`budget_authority_id` 写入 doctor、预算状态与调用账本。因而为测试设置新的
+`SMART_LLM_RUNTIME_DIR` 不会获得一份新的工作流预算。
+当当前执行环境不能写入持久运行目录时，便携启动器会退到临时目录；`doctor`
+会明确显示 `runtime_dir_source=temporary_fallback`、预期持久目录和原因。此时的
+`status` 只代表该临时运行态，不能拿来否定另一个运行态中的成功健康证据。
+首次使用旧 workflow 时，路由器会从标准旧运行目录保守导入 v1 状态。
+导入完整保留停表状态、硬上限、累计支出、活动预留、事故和旧时间戳；
+若固定 authority 已有无法匹配的状态，或多个旧来源内容不一致，则在任何付费请求前
+失败关闭，并写入 `migration-receipts` 脱敏回执。
+所有 workflow maximum、spent、call maximum、reserved cost 与 settlement actual
+在算术前必须通过有限数检查；JSON `NaN`、`Infinity` 和 `-Infinity` 一律阻断。
+
 ## 能力
 
 - 按任务选择模型：除基础任务外，增加 `plan`、`execute`、`audit`、`verify`、`quality_enhance` 五个生产角色。
 - 防返工工作流：`workflow-plan` 固化“规划 -> 规划审查 -> 执行 -> 过程检查 -> 最终偏离复验”，`workflow-check` 在本地判定继续、复验、停止或完成。
 - 旗舰质量链：规划、执行、跨厂商审计、独立复验、最终质量提升各自选择最合适模型；同模型换 Key 只算容灾，不算独立复验。
-- 四档质量：`draft`、`production`、`audit`、`frontier` 分别要求角色质量档至少为 2、3、4、4。达到下限后再按健康、预算资格、免费、重试后预计成本、P95 延迟和质量余量排序。
-- 隐私与预算门：私人图片、聊天记录、身份信息和原始音视频默认 `local_only`；`--max-cost-usd` 下未知价格的付费模型失败关闭。
+- 四档质量：`draft`、`production`、`audit`、`frontier` 分别要求角色质量档至少为 2、3、4、4。达到下限后再按健康、预算资格、重试后预计总成本、P95 延迟和稳定规则排序；免费不是独立的提前排序项。
+- 隐私与预算门：私人图片、聊天记录、身份信息和原始音视频默认 `local_only`；所有普通执行默认无付费权限，`task --paid` 必须同时给出 `--max-cost-usd`，未知价格或超预算路线失败关闭。
 - 多模态路由预演：`route-plan` 会先输出任务描述器、本地步骤、免费池、低价付费和 Codex 审计路线，不调用模型。
 - Provider-family 能力注册表：`capabilities` 会区分“供应商 API key 已知可支持的模型态”和“当前已配置、已探活、可执行路由的具体模型”，覆盖文本、视觉/OCR、ASR、图像/视频生成、embedding、rerank、code 等。
 - 本地 Whisper 稳定模式：`SMART_LLM_ASR_WHISPER_CPP_NO_GPU=true` 会为 whisper.cpp 加入官方 `-ng/--no-gpu` 参数；公共默认保持 `false`，只在 GPU/Metal 路径不稳定的主机启用。
@@ -80,7 +117,10 @@ $HOME/.local/state/smart-llm-router
 - 失败冷却：429、超时、403、空返回会进入冷却，下次跳过。
 - 免费池全冷却自救：调用前轻量探活，避免误入付费。
 - 角色路线同时考虑任务专长与成本：DeepSeek V4、Qwen 3.7、GLM-5.2、Kimi K3、Gemini Free Tier 和 Doubao Seed 2.1/2.0 分工协作。
-- 本地复杂度评分：先判断 `simple`、`medium`、`hard`，简单任务默认禁用付费兜底。
+- MiniMax 中国区付费文本路线：`MiniMax-M3` 为普通文本付费候选，`MiniMax-M2.7` 为同供应商回退；两者必须通过显式付费与预算门，且在角色 golden gate 通过前没有 plan/audit/verify 质量档。
+- 规划模型不强制免费：先由复杂度与风险确定质量档，再在同档合格路线中按重试修正后的预期总成本和延迟选择。
+- DeepSeek-V4-Flash-0731 已登记为待晋升候选；受控规划集完成 2/5 后遇到 529，稳定性门未过，暂不进入生产角色。
+- 本地复杂度评分：先判断 `simple`、`medium`、`hard` 并确定质量门；复杂度不会自动授予付费权限。
 - 成本/调用账本：记录每次模型调用、失败和缓存命中，便于后续调优。
 - 历史健康真值面：`route-stats` 按任务/provider/model 汇总成功率、失败类型、P95 延迟和观测成本；明确的本地基础设施故障不计入模型失败率。
 - 模型晋级门：`golden-eval` 用任务黄金集对比候选与基线并生成盲审包；`promotion-check` 结合案例、成本、健康样本和独立第三家盲审，只输出可登记资格，不自动修改生产角色表。
@@ -92,17 +132,18 @@ $HOME/.local/state/smart-llm-router
 - 动态发现的 NVIDIA 候选继承同供应商多 key 轮换；某个 key 对具体模型返回 401/403 时可尝试下一条已配置路线，但不会把鉴权失败冒充为模型故障或免费保证。
 - 标记为免费且 `billing_class=trial_quota` 的路线默认不进入执行池。只有逐个 Provider 核实“当前仍有免费额度”且账户或模型已启用“额度耗尽即停止、不转付费”后，才可在本机私有配置设置 `SMART_LLM<n>_TRIAL_QUOTA_GUARDED=true`；目录标签、key 存在或旧调用成功都不能替代这两项证明。
 - 发现不等于生产晋级：新免费模型可进入通用任务池，规划、执行、审计和复验仍须通过基准测试并登记质量档。
-- 按模态健康检查：`refresh-modalities` 会分别用 text/vision/OCR/transcript/code 小探针验证模型，而不只用通用 QA。
+- 按模态健康检查：`refresh-modalities` 会分别用 text/vision/OCR/transcript/code 小探针验证模型，而不只用通用 QA；未保护试用路线默认跳过，审计时须显式使用 `--include-unprotected-trial`。
 - 可迁移：`.env` + 本目录即可复制到其他电脑。
 
 ## 安装
 
-从当前 GitHub 发布包安装：
+`0.9.0` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
+会暂时不可用；此时请等待发布门完成，或按下一节从源码验证，不要改用旧版本链接：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.7.0/smart_llm_router-0.7.0-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.0/smart_llm_router-0.9.0-py3-none-any.whl"
 smart-llm-router --help
 ```
 
@@ -134,6 +175,7 @@ smart-llm-router credential-status
 smart-llm-router recommend "Return OK" --task qa --free-only
 smart-llm-router route-plan "Return OK" --task qa --quality-target production
 smart-llm-router task "Return OK" --task qa --free-only
+smart-llm-router task "Return OK" --task qa --free-only --strict-controls --no-cache
 smart-llm-router maintain --limit 8
 smart-llm-router status
 smart-llm-router ledger --limit 20
@@ -154,10 +196,46 @@ NVIDIA 的发现命令只读取公共目录；Groq 发现使用认证目录；�
 
 实验性任务描述器 v2 默认关闭。显式设置
 `SMART_LLM_TASK_DESCRIPTOR_V2_ENABLED=true` 后，它只影响非角色任务的复杂度标签；
-`plan`、`execute`、`audit`、`verify`、`quality_enhance` 仍保持原角色质量档。
+`plan`、`research_enhance`、`plan_audit`、`execute`、`audit`、`verify`、`quality_enhance` 仍保持角色质量档。
 删除该变量或设为 `false` 即回退，隐私、生命周期、健康、预算和 `quality_target` 门不变。
 当任务明确要求严格 JSON 时，响应必须可被本地 JSON 解析器直接读取；Markdown 围栏等不合格输出不会缓存或返回，
-路由器会尝试下一条合格路线，全部不合格则失败关闭。
+并立即失败关闭，不会把同一治理判断交给下一条路线重新解释。带 JSON Schema 的
+OpenRouter 调用会同时发送 `response_format=json_schema`、`strict=true` 和
+`require_parameters=true`，返回后仍执行本地递归 schema 校验。
+
+需要锁定 OpenRouter 实际承载策略时，使用请求级控制，不在公共配置中硬编码临时 endpoint：
+
+```bash
+smart-llm-router task "Only raw JSON. JSON Schema: {...}" \
+  --task ocr --free-only --provider openrouter-vision-free \
+  --openrouter-upstream-provider provider-slug --openrouter-no-fallbacks \
+  --openrouter-require-zdr --openrouter-deny-data-collection --no-cache
+```
+
+`--openrouter-upstream-provider` 接受 OpenRouter 公布的 provider slug，可重复；
+`--openrouter-no-fallbacks` 禁止隐式切换承载方；ZDR 和 data-collection 控制分别
+映射到 OpenRouter 的每请求 `provider.zdr=true` 与 `data_collection=deny`。
+这些开关只约束 OpenRouter，若路由过滤后没有 OpenRouter 候选，会在网络发送前失败关闭。
+只有同时存在请求级约束、且 OpenRouter 结构化错误正文明确命中 ZDR、数据策略、provider 选择或
+结构化输出约束时，该 400/404/422/503 才作为策略不兼容记账而不污染普通 provider/model 冷却。
+单凭状态码不会获得豁免；认证、配额、传输、超时和模型不存在仍会冷却。
+本地二次校验只接受有界、依赖无关的 JSON Schema 2020-12 子集：`type/const/enum`、
+`properties/required/additionalProperties`、对象/数组/字符串数量边界、`items/uniqueItems`、
+数值边界以及 `allOf/anyOf/oneOf/not`。未知验证关键字、其他方言、超出深度/节点上限、
+非有限 JSON 数字和重复对象键都会在发送前或消费前失败关闭。
+
+治理外部调用可使用 `task --strict-controls`，它会在路由、付费预留和 provider
+发送前校验所有 `SMART_LLM` 控制名。未注册或误拼的近似名（例如
+`SMART_LLM_CACHE_ENABLED`）会以脱敏诊断失败关闭。`task --no-cache` 为本次
+请求显式关闭缓存读写；支持的环境开关是 `SMART_LLM_CACHE=false`。
+
+付费路线在发送前会对本地输入 token 估算施加保守系数；DeepSeek V4 在没有
+权威 tokenizer 结果时至少使用 `1.15`。账本同时记录原始估算、保护后 token、
+保护方法/系数、预留输出和预测成本。`--max-cost-usd` 是本地预测门，不是
+provider 强制消费上限；结算仍以 provider 返回的 usage 为权威。可用
+`--input-token-guard-factor` 进一步提高保护系数，但不能降低内置安全下限。
+单次上限必须是有限非负数，工作流累计上限必须是有限正数；`NaN` 与
+正负 `Infinity` 会在配置读取、缓存、预算预留和发送之前失败关闭。
 
 最小执行验证：
 
@@ -169,14 +247,16 @@ smart-llm-router task "Return OK" --task qa --free-only
 
 | 阶段 | 优先专长 | 主要候选 |
 |---|---|---|
-| 规划 | 约束、架构、验收设计 | Qwen 3.7 Max、Kimi K3、Doubao Seed 2.x |
+| 工作区规划 | 约束、架构、验收设计 | Codex GPT-5.6 Sol 控制器声明；简单任务可用 Terra |
+| 研究增强 | 带来源的互联网方法学习与增量设计 | Qwen 3.7 Max；Kimi K3 备选 |
+| 规划挑战审计 | 独立检查遗漏、错误假设和不可执行点 | DeepSeek V4 Pro；Flash-0731 通过角色门后优先 |
 | 执行 | 长链路工程和代码落地 | GLM-5.2、DeepSeek V4 Pro、Doubao Seed 2.0 Code |
 | 审计 | 跨厂商找错与风险覆盖 | Gemini 2.5 Pro Free Tier、DeepSeek V4 Pro、Qwen 3.7 Max |
 | 复验 | 不继承主结论重新核对 | Gemini 2.5 Pro Free Tier、DeepSeek V4 Pro、Doubao Seed 2.x；公开草稿可用 Groq GPT-OSS 120B（二档、试用额度） |
 | 提质 | 保持事实边界的最终收束 | Kimi K3、Qwen 3.7 Max、GLM-5.2 |
 | 多模态支线 | 图片理解、OCR、图文联合推理 | Gemini 2.5 Pro Free Tier、Doubao Seed 2.0 Pro、Kimi K3 |
 
-选择顺序固定为：隐私与模态硬门槛 -> `quality_target` 最低角色档（`draft=2`、`production=3`、`audit=4`、`frontier=4`）-> 当前冷却/额度和历史路线健康 -> 预算资格 -> 免费优先 -> 按平滑成功率修正的预计总成本 -> 成功调用 P95 延迟 -> 更高质量余量 -> 角色预设顺序 -> Provider 优先级。至少 3 个非基础设施健康样本且成功率低于 50% 才标记为退化；明确的本地基础设施故障单列，不污染模型成功率。只要达到任务要求的质量下限，健康免费模型可以压过更高但不必要的付费档；低于下限或未登记的模型不会进入角色路线。没有合格角色模型时明确失败关闭，不回退到通用池。每个阶段只执行一个主模型，失败才按候选顺序切换；规划审核和最终复验属于独立治理关卡，不算重复执行。
+通用选择顺序为：隐私与模态硬门槛 -> `quality_target` 最低角色档 -> 当前冷却/额度和历史健康 -> 付费授权与预算资格 -> 重试修正后的预计总成本 -> P95 延迟 -> 质量余量。`research_enhance` 和 `plan_audit` 是用户确认的专用角色，在能力、健康、晋升、隐私和预算门均通过后，分别优先 Qwen 与 DeepSeek 家族。免费路线只有在相同质量与可靠性门通过后才因零价格胜出。每个阶段只执行一个主模型，规划审核和最终复验属于独立治理关卡。
 
 健康证据只说明 endpoint 最近是否可调用，不等于回答质量。动态发现的新模型仍须通过任务探针、黄金集与独立复核，才能登记进 `plan`、`execute`、`audit`、`verify` 或 `quality_enhance` 的角色质量档。
 
@@ -205,7 +285,7 @@ smart-llm-router promotion-check \
 
 公共模板把免费层与付费层分开配置。免费层只处理公开、非敏感内容；任何付费路线都必须显式启用并受预算门约束。
 
-### 防返工工作流
+### 结果优先工作流
 
 真正的节约先减少错误规划和方向漂移，再考虑模型单价。工作流默认是 dry-run，不调用模型：
 
@@ -220,7 +300,9 @@ smart-llm-router workflow-check \
   --output-dir ./runtime/workflows
 ```
 
-`workflow-plan` 同时检查工作流总预算、单阶段预算、规划与规划审查是否使用独立模型家族、执行与最终复验是否独立，以及 Hermes 无人值守安全门。过程检查点出现范围变化、证据缺失、验收项失败或未知、目标对齐不确定时返回 `verify_required`；目标已偏离、预算超限或最终验收不完整时返回 `stop`。最终提质只在复验明确发现质量缺口时条件调用。真正模型执行继续复用现有 `task` 命令，每次只运行一个已批准阶段。
+`workflow_contract.v2` 先选择 `simple`、`standard` 或 `complex`。复杂任务依次声明 Sol 设计、带URL和日期的来源包、Qwen研究增强、DeepSeek规划审计、廉价整改、原审计模型增量复验、廉价执行、确定性节点校验、最终成果审计、成果整改、差异复验与收口。软预算超出只告警；弹性上限外需要新授权；异常硬上限、隐私、凭据、破坏性操作和目标偏离继续失败关闭。v1契约保持原语义兼容。
+
+`workflow-check` 可返回 `continue`、`verify_required`、`repair_required`、`redesign_required`、`authorization_required`、`complete` 或 `stop`。局部缺陷进入一次有界整改，目标或架构根本失效返回Sol，最终差异复验复用原审计模型，不重新全量审查。
 
 外围适配器和供应商专用操作不属于公开快速入口。它们保留向后兼容，但必须通过
 `smart-llm-router --help` 显式发现，并继续受隐私、付费许可、健康和生命周期门约束。
@@ -257,8 +339,9 @@ macOS/Linux cron 示例，每 6 小时探活一次：
 - `score` 命令完全本地运行，不调用模型。
 - `route-stats` 完全本地读取账本，不调用模型、不读取或输出 API key；可用它判断某个任务路线是配额退化、端点失效还是仅遇到本地基础设施故障。
 - `promotion-check` 完全本地运行；黄金集文件禁止携带 API key、令牌、密码或私钥字段，公开套件和私有套件必须按隐私边界分开保存。
-- `simple` 任务在默认模式下只走免费池；免费池不可用时会报错，不直接烧付费模型。
-- `medium` 和 `hard` 任务仍免费优先，免费池失败后才按低价付费兜底。
+- 所有普通执行默认无付费权限；免费池不可用时会失败关闭，不因任务复杂度自动烧付费模型。
+- `medium` 和 `hard` 只提高质量门。需要付费时，操作者必须显式使用 `--paid --max-cost-usd <上限>`；程序调用必须显式设置 `paid_fallback=True`。
+- `remote-transcribe`、`embed`、`rerank` 和图像生成分别使用 `--allow-paid`；`transcript-correct` 使用 `--paid-main --max-cost-usd`。一种命令的付费许可不会传递给另一种命令或独立复验。
 - 专用能力必须独立通过配置、健康、隐私和费用许可检查，不能因某个 Provider 已配置就推断其全部模型态可用。
 - 未经验证的 endpoint、模型名或占位资源不得进入生产路由。
 

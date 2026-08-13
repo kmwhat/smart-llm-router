@@ -13,15 +13,27 @@ import tempfile
 import time
 from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
 
+from .budget import (
+    BudgetLimitExceeded,
+    BudgetReservation,
+    budget_authority_id,
+    finalize_workflow_reservation,
+    release_workflow_reservation,
+    reserve_workflow_budget,
+    write_budget_incident,
+    write_budget_warning,
+)
 from .config import LLMProvider, Settings
+from .controls import build_control_preflight
 
 
 DEFAULT_TASK_ORDER = {
@@ -32,6 +44,22 @@ DEFAULT_TASK_ORDER = {
         "zhipu-glm-lowcost",
         "deepseek-direct-paid",
         "gemini-frontier-paid",
+    ],
+    "research_enhance": [
+        "qwen-frontier-paid",
+        "kimi-frontier-paid",
+        "zhipu-glm-lowcost",
+        "gemini-frontier-paid",
+        "deepseek-direct-paid",
+    ],
+    "plan_audit": [
+        "deepseek-direct-paid",
+        "nvidia-free",
+        "nvidia-free-key2",
+        "kimi-frontier-paid",
+        "zhipu-glm-lowcost",
+        "gemini-frontier-paid",
+        "qwen-frontier-paid",
     ],
     "execute": [
         "zhipu-glm-lowcost",
@@ -170,6 +198,7 @@ DEFAULT_TASK_ORDER = {
 
 PAID_FALLBACK_ORDER = [
     "deepseek-direct-paid",
+    "minimax-frontier-paid",
     "openrouter-deepseek-fallback",
     "zhipu-glm-lowcost",
     "qwen-frontier-paid",
@@ -186,6 +215,8 @@ DEFAULT_MODALITY_HEALTH_TASKS = ("qa", "vision", "ocr", "transcript_correct", "c
 
 SYSTEM_PROMPTS = {
     "plan": "你是资深规划与架构助手。先澄清目标、约束和验收标准，再给出分阶段方案、关键取舍、风险与回退路径；不要替执行阶段虚构结果。",
+    "research_enhance": "你是研究增强助手。只依据带来源和日期的研究证据提出增量修改，逐项说明证据、变化和不采纳理由；不要黑箱重写已经确认的规划。",
+    "plan_audit": "你是独立规划挑战审计助手。不要沿用规划或研究增强模型的结论；从原始目标、验收标准、风险、成本和可执行性重新挑错，并区分局部整改与必须重新设计。",
     "execute": "你是资深执行助手。严格按既定目标和约束完成工作，保持最小必要改动，给出可验证产物、测试证据和未解决风险。",
     "draft": "你是一线草稿助手。输出结构化、可复核的初稿，不夸大，不编造。",
     "classify": "你是资料分类助手。优先输出简洁 JSON。",
@@ -201,11 +232,11 @@ SYSTEM_PROMPTS = {
     "code": "你是代码辅助助手。优先给出可验证、最小改动、风险清楚的建议。",
 }
 
-TEXT_TASKS = {"plan", "execute", "draft", "classify", "summarize", "clean", "qa", "transcript_correct", "audit", "verify", "quality_enhance", "code"}
+TEXT_TASKS = {"plan", "research_enhance", "plan_audit", "execute", "draft", "classify", "summarize", "clean", "qa", "transcript_correct", "audit", "verify", "quality_enhance", "code"}
 VISION_TASKS = {"vision", "ocr"}
 LOCAL_ONLY_TASKS = {"asr"}
 SPECIALIZED_TASKS = {"image_generate", "video_generate", "tts"}
-ROLE_TASKS = {"plan", "execute", "audit", "verify", "quality_enhance"}
+ROLE_TASKS = {"plan", "research_enhance", "plan_audit", "execute", "audit", "verify", "quality_enhance"}
 QUALITY_TARGETS = {"draft", "production", "audit", "frontier"}
 ROLE_MIN_QUALITY_BANDS = {
     "draft": 2,
@@ -219,14 +250,18 @@ ROUTE_HEALTH_MIN_SAMPLES = 3
 # tie-breaker, and environment price overrides still control the budget gate.
 ROLE_MODEL_ORDER: dict[str, tuple[str, ...]] = {
     "plan": ("qwen3.7-max", "doubao-seed-2-1-pro", "kimi-k3", "glm-5.2", "deepseek-v4-pro", "gemini-3.1-pro-preview", "gemini-2.5-pro", "doubao-seed-2-0-pro-260215"),
+    "research_enhance": ("qwen3.7-max", "kimi-k3", "glm-5.2", "gemini-3.1-pro-preview", "gemini-2.5-pro", "deepseek-v4-pro"),
+    "plan_audit": ("deepseek-v4-flash", "deepseek-v4-pro", "kimi-k3", "glm-5.2", "gemini-3.1-pro-preview", "gemini-2.5-pro", "qwen3.7-max"),
     "execute": ("glm-5.2", "doubao-seed-2-0-code-preview-260215", "doubao-seed-2-1-pro", "deepseek-v4-pro", "qwen3.7-plus", "qwen3.7-max", "kimi-k3", "gemini-2.5-pro", "doubao-seed-2-0-pro-260215"),
     "audit": ("gemini-2.5-pro", "gemini-3.1-pro-preview", "qwen3.7-max", "doubao-seed-2-1-pro", "deepseek-v4-pro", "glm-5.2", "kimi-k3", "doubao-seed-2-0-pro-260215"),
-    "verify": ("gemini-2.5-pro", "doubao-seed-2-1-pro", "qwen3.7-max", "deepseek-v4-pro", "glm-5.2", "kimi-k3", "gemini-3.1-pro-preview", "doubao-seed-2-0-pro-260215", "openai/gpt-oss-120b"),
+    "verify": ("deepseek-v4-flash", "deepseek-v4-pro", "qwen3.7-max", "kimi-k3", "glm-5.2", "gemini-2.5-pro", "gemini-3.1-pro-preview", "doubao-seed-2-1-pro", "doubao-seed-2-0-pro-260215", "openai/gpt-oss-120b"),
     "quality_enhance": ("kimi-k3", "qwen3.7-max", "doubao-seed-2-1-pro", "glm-5.2", "gemini-2.5-pro", "deepseek-v4-pro", "doubao-seed-2-0-pro-260215"),
 }
 
-# Bands express role fit, not a universal benchmark score. A higher band wins;
-# within the same band, a healthy free route wins before projected cost.
+# Bands express role fit, not a universal benchmark score. The requested
+# quality target determines the minimum capability floor. Among routes that
+# clear the same floor, compare expected total cost after reliability rather
+# than treating "free" as a separate quality-independent preference.
 ROLE_QUALITY_BANDS: dict[str, dict[str, int]] = {
     "plan": {
         "qwen3.7-max": 4,
@@ -237,6 +272,22 @@ ROLE_QUALITY_BANDS: dict[str, dict[str, int]] = {
         "deepseek-v4-pro": 3,
         "gemini-2.5-pro": 3,
         "doubao-seed-2-0-pro-260215": 3,
+    },
+    "research_enhance": {
+        "qwen3.7-max": 4,
+        "kimi-k3": 4,
+        "glm-5.2": 3,
+        "gemini-3.1-pro-preview": 3,
+        "gemini-2.5-pro": 3,
+        "deepseek-v4-pro": 3,
+    },
+    "plan_audit": {
+        "deepseek-v4-pro": 4,
+        "kimi-k3": 4,
+        "glm-5.2": 3,
+        "gemini-3.1-pro-preview": 4,
+        "gemini-2.5-pro": 4,
+        "qwen3.7-max": 4,
     },
     "execute": {
         "glm-5.2": 4,
@@ -281,6 +332,25 @@ ROLE_QUALITY_BANDS: dict[str, dict[str, int]] = {
     },
 }
 
+# Publicly announced models remain candidates until a matching local golden
+# gate passes. Keeping the status explicit makes "known but not promoted"
+# distinguishable from an unknown or forgotten model.
+PENDING_ROLE_CANDIDATES: dict[str, dict[str, str]] = {
+    "deepseek-v4-flash": {
+        "status": "pending_role_golden_gate",
+        "reason": "official_0731_agent_update_but_local_plan_gate_failed_route_stability",
+        "version": "DeepSeek-V4-Flash-0731",
+    },
+}
+
+# Provider catalogs may append a deployment revision to the upstream model ID.
+# Normalize only reviewed identities so pending-candidate metadata and request
+# adapters apply without granting a role-quality band.
+ROLE_MODEL_ALIASES: dict[str, str] = {
+    "deepseek-ai/deepseek-v4-flash-0731": "deepseek-v4-flash",
+    "deepseek-v4-flash-0731": "deepseek-v4-flash",
+}
+
 MULTIMODAL_UNDERSTANDING_ORDER = (
     "doubao-seed-2-0-pro-260215",
     "qwen3.7-plus",
@@ -323,7 +393,46 @@ MODEL_PRICE_CATALOG: dict[str, dict[str, float | str]] = {
     "kimi-k3": {"input": 20.0, "output": 100.0, "currency": "CNY"},
     "gemini-2.5-pro": {"input": 1.25, "output": 10.0, "currency": "USD"},
     "gemini-3.1-pro-preview": {"input": 2.0, "output": 12.0, "currency": "USD"},
+    # MiniMax-M3 has tiered pricing above 512k input tokens. Use the higher
+    # public standard-tier price here so local USD budgets never under-reserve.
+    "minimax-m3": {"input": 4.2, "output": 16.8, "currency": "CNY"},
+    "minimax-m2.7": {"input": 2.1, "output": 8.4, "currency": "CNY"},
 }
+
+# Reasoning endpoints can bill hidden reasoning tokens in addition to the
+# requested visible answer cap. Reserve a conservative envelope before sending.
+MODEL_BILLABLE_OUTPUT_RESERVE_MULTIPLIER: dict[str, float] = {
+    "deepseek-v4-pro": 2.0,
+}
+
+# Alibaba documents that max_completion_tokens covers reasoning plus answer for
+# Qwen 3.7, with a possible difference of up to ten tokens.
+MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD: dict[str, int] = {
+    "qwen3.7-max": 10,
+    "qwen3.7-plus": 10,
+    "qwen3.6-flash": 10,
+}
+
+# Local token counts are forecasts, not provider-enforced spend ceilings.
+# Preserve a generic paid-route margin and a larger DeepSeek V4 margin learned
+# from the 21476 -> 23139 provider-usage incident when no authoritative
+# tokenizer result is available.
+DEFAULT_PAID_INPUT_TOKEN_GUARD_FACTOR = 1.10
+PROVIDER_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
+    "deepseek-direct-paid": 1.15,
+}
+MODEL_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
+    "deepseek-v4-flash": 1.15,
+    "deepseek-v4-pro": 1.15,
+}
+# Provider tokenizers may add a fixed chat-template/system envelope that is
+# disproportionate for tiny prompts. The first bounded MiniMax-M3 canary
+# reported 199 input tokens for a local estimate of 48; reserve that observed
+# fixed delta plus margin without multiplying every large prompt by 4x.
+MODEL_INPUT_TOKEN_GUARD_OVERHEAD: dict[str, int] = {
+    "minimax-m3": 160,
+}
+MAX_GUARDED_INPUT_TOKENS = (1 << 63) - 1
 
 PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
     "local": {
@@ -344,14 +453,14 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
         "env_keys": ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
         "input_modalities": ["text"],
         "output_modalities": ["text"],
-        "task_types": ["plan", "execute", "transcript_correct", "clean", "summarize", "qa", "draft", "audit", "verify", "quality_enhance", "code"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "transcript_correct", "clean", "summarize", "qa", "draft", "audit", "verify", "quality_enhance", "code"],
         "notes": "Preferred low-cost paid family for transcript correction and structured synthesis when configured directly or through OpenRouter.",
     },
     "qwen": {
         "env_keys": ["DASHSCOPE_API_KEY"],
         "input_modalities": ["text", "image", "audio", "video"],
         "output_modalities": ["text", "image", "video", "embedding", "score"],
-        "task_types": ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "embed", "rerank", "transcript_correct", "audit", "verify", "quality_enhance"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "embed", "rerank", "transcript_correct", "audit", "verify", "quality_enhance"],
         "model_modes": {
             "text_reasoning": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long"],
             "vision_ocr": ["qwen-vl-max", "qwen-vl-plus", "qwen-omni"],
@@ -366,7 +475,7 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
         "env_keys": ["ZHIPU_API_KEY", "GLM_API_KEY"],
         "input_modalities": ["text", "image", "audio", "video"],
         "output_modalities": ["text", "image", "audio", "video", "embedding", "score"],
-        "task_types": ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "embed", "rerank", "audit", "verify", "quality_enhance", "transcript_correct"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "embed", "rerank", "audit", "verify", "quality_enhance", "transcript_correct"],
         "model_modes": {
             "text_reasoning": ["glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4.5-air"],
             "vision_ocr": ["glm-5v-turbo", "glm-4.6v", "glm-4v-plus", "glm-4v-flash", "glm-ocr"],
@@ -382,7 +491,7 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
         "env_keys": ["ARK_API_KEY", "DOUBAO_API_KEY"],
         "input_modalities": ["text", "image", "audio", "video"],
         "output_modalities": ["text", "image", "audio", "video", "embedding"],
-        "task_types": ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "video_generate", "embed", "audit", "verify", "quality_enhance", "code"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "asr", "image_generate", "video_generate", "embed", "audit", "verify", "quality_enhance", "code"],
         "model_modes": {
             "multimodal_reasoning": ["doubao-seed-2.1-pro", "doubao-seed-2.1-turbo", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite"],
             "multimodal_code": ["doubao-seed-2.0-code"],
@@ -411,18 +520,28 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
         "env_keys": ["GEMINI_API_KEY"],
         "input_modalities": ["text", "image", "audio", "video"],
         "output_modalities": ["text"],
-        "task_types": ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "audit", "verify", "quality_enhance", "transcript_correct"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "audit", "verify", "quality_enhance", "transcript_correct"],
         "notes": "Independent paid multimodal family, especially useful for visual review and cross-vendor verification.",
     },
     "kimi": {
         "env_keys": ["KIMI_API_KEY"],
         "input_modalities": ["text", "image"],
         "output_modalities": ["text"],
-        "task_types": ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "audit", "verify", "quality_enhance", "transcript_correct", "code"],
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "vision", "ocr", "audit", "verify", "quality_enhance", "transcript_correct", "code"],
         "model_modes": {
             "multimodal_reasoning": ["kimi-k3", "kimi-k2.6"],
         },
         "notes": "Long-context paid multimodal family for knowledge work, long-horizon agents, and final quality enhancement.",
+    },
+    "minimax": {
+        "env_keys": ["MINIMAX_API_KEY"],
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "task_types": ["classify", "clean", "summarize", "qa", "draft", "transcript_correct", "code"],
+        "model_modes": {
+            "text_reasoning": ["MiniMax-M3", "MiniMax-M2.7"],
+        },
+        "notes": "China-region paid OpenAI-compatible text route. Role-quality bands remain unregistered until matching golden gates pass.",
     },
 }
 
@@ -454,6 +573,44 @@ class RouteState:
 class RouteHealthEvidence:
     last_success_at: datetime | None
     last_failure_at: datetime | None
+
+
+class InconclusiveModelOutput(RuntimeError):
+    """The endpoint responded, but no user-visible final answer was emitted."""
+
+    def __init__(
+        self,
+        route: str,
+        *,
+        reasoning_present: bool,
+        finish_reason: str | None,
+        usage: dict[str, Any] | None = None,
+    ) -> None:
+        details = []
+        if reasoning_present:
+            details.append("reasoning_present")
+        if finish_reason:
+            details.append(f"finish_reason={finish_reason}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        super().__init__(f"{route} 未返回最终正文{suffix}")
+        self.reasoning_present = reasoning_present
+        self.finish_reason = finish_reason
+        self.usage = dict(usage or {})
+
+
+class GovernedInvalidOutput(RuntimeError):
+    """A billed response failed the governed output contract and must not fall back."""
+
+
+class RequestPolicyIncompatibility(RuntimeError):
+    """The endpoint rejected request-scoped controls, not the generic route."""
+
+    def __init__(self, status_code: int, reason: str = "request_constraints") -> None:
+        super().__init__(
+            f"OpenRouter request policy incompatible ({reason}, HTTP {status_code})"
+        )
+        self.status_code = status_code
+        self.reason = reason
 
 
 def _now() -> datetime:
@@ -488,6 +645,29 @@ def _discovered_free_path(settings: Settings) -> Path:
     return settings.data_dir / "llm_discovered_free_models.json"
 
 
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    """Persist a resumable runtime report without exposing a partial JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _family_name(provider_name: str) -> str:
     provider_name = provider_name.lower()
     if provider_name.startswith("openrouter"):
@@ -519,6 +699,8 @@ def _provider_family(provider: LLMProvider) -> str:
         return "deepseek"
     if "moonshot" in text or "kimi" in text:
         return "kimi"
+    if "minimax" in text or "minimaxi.com" in text:
+        return "minimax"
     return _family_name(provider.name)
 
 
@@ -1015,6 +1197,10 @@ def normalize_task_type(task: str) -> str:
         "review": "audit",
         "planning": "plan",
         "strategy": "plan",
+        "research": "research_enhance",
+        "research_upgrade": "research_enhance",
+        "challenge_audit": "plan_audit",
+        "planning_audit": "plan_audit",
         "implementation": "execute",
         "executor": "execute",
         "cross_check": "verify",
@@ -1033,12 +1219,34 @@ def normalize_task_type(task: str) -> str:
     return aliases.get(normalized, normalized)
 
 
+def _role_model_aliases(choice: LLMChoice) -> tuple[str, ...]:
+    raw = choice.model.lower().strip()
+    without_free = re.sub(r":free$", "", raw)
+    basename = without_free.rsplit("/", 1)[-1]
+    aliases = [raw, without_free, basename]
+    aliases.extend(
+        ROLE_MODEL_ALIASES[alias]
+        for alias in tuple(aliases)
+        if alias in ROLE_MODEL_ALIASES
+    )
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _is_deepseek_v4_choice(choice: LLMChoice) -> bool:
+    return _model_family(choice) == "deepseek" and any(
+        alias in {"deepseek-v4-flash", "deepseek-v4-pro"}
+        for alias in _role_model_aliases(choice)
+    )
+
+
+def _is_nvidia_deepseek_v4_choice(choice: LLMChoice) -> bool:
+    return _provider_family(choice.provider) == "nvidia" and _is_deepseek_v4_choice(choice)
+
+
 def _role_model_rank(choice: LLMChoice, task: str) -> int:
     ordered = ROLE_MODEL_ORDER.get(normalize_task_type(task), ())
-    try:
-        return ordered.index(choice.model.lower())
-    except ValueError:
-        return 100
+    ranks = [ordered.index(alias) for alias in _role_model_aliases(choice) if alias in ordered]
+    return min(ranks) if ranks else 100
 
 
 def _rank_choices(choices: list[LLMChoice], task: str) -> list[LLMChoice]:
@@ -1163,8 +1371,8 @@ def _choice_task_types(choice: LLMChoice) -> list[str]:
     if _is_vision_choice(choice):
         return ["vision", "ocr"]
     if _is_code_choice(choice):
-        return ["plan", "execute", "code", "clean", "qa", "summarize", "draft", "audit", "verify", "quality_enhance", "transcript_correct"]
-    return ["plan", "execute", "classify", "clean", "summarize", "qa", "draft", "audit", "verify", "quality_enhance", "transcript_correct"]
+        return ["plan", "research_enhance", "plan_audit", "execute", "code", "clean", "qa", "summarize", "draft", "audit", "verify", "quality_enhance", "transcript_correct"]
+    return ["plan", "research_enhance", "plan_audit", "execute", "classify", "clean", "summarize", "qa", "draft", "audit", "verify", "quality_enhance", "transcript_correct"]
 
 
 def _choice_model_mode(choice: LLMChoice) -> str:
@@ -1201,6 +1409,14 @@ def describe_choice_capability(choice: LLMChoice) -> dict[str, Any]:
     modalities = _choice_modalities(choice)
     model_family = _model_family(choice)
     catalog = PROVIDER_FAMILY_CATALOG.get(model_family) or PROVIDER_FAMILY_CATALOG.get(_provider_family(choice.provider), {})
+    pending = next(
+        (
+            PENDING_ROLE_CANDIDATES[alias]
+            for alias in _role_model_aliases(choice)
+            if alias in PENDING_ROLE_CANDIDATES
+        ),
+        None,
+    )
     return {
         "provider": choice.provider.name,
         "model": choice.model,
@@ -1222,7 +1438,12 @@ def describe_choice_capability(choice: LLMChoice) -> dict[str, Any]:
         "estimated_input_price_per_million": _price_per_million(choice, "input"),
         "estimated_output_price_per_million": _price_per_million(choice, "output"),
         "price_currency": "USD",
-        "role_fit": [role for role, models in ROLE_MODEL_ORDER.items() if choice.model.lower() in models],
+        "role_fit": [
+            role
+            for role, models in ROLE_MODEL_ORDER.items()
+            if any(alias in models for alias in _role_model_aliases(choice))
+        ],
+        "role_candidate_status": dict(pending) if pending else None,
         "redundancy_identity": f"{model_family}/{choice.model.lower()}",
     }
 
@@ -1383,7 +1604,8 @@ def _dedupe_model_routes(choices: list[LLMChoice]) -> list[LLMChoice]:
 
 
 def _role_quality_band(choice: LLMChoice, role: str) -> int:
-    return ROLE_QUALITY_BANDS.get(normalize_task_type(role), {}).get(choice.model.lower(), 0)
+    bands = ROLE_QUALITY_BANDS.get(normalize_task_type(role), {})
+    return max((bands.get(alias, 0) for alias in _role_model_aliases(choice)), default=0)
 
 
 def _minimum_role_quality_band(quality_target: str) -> int:
@@ -1402,6 +1624,7 @@ def _role_policy_choices(
     max_cost_usd: float | None,
     paid_allowed: bool,
     history: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+    collapse_key_rotations: bool = True,
 ) -> list[LLMChoice]:
     minimum_band = _minimum_role_quality_band(quality_target)
     choices = [
@@ -1416,7 +1639,7 @@ def _role_policy_choices(
 
     history = history if history is not None else _route_history_map(settings, task=role)
 
-    def sort_key(choice: LLMChoice) -> tuple[int, int, int, float, float, float, int, int]:
+    def sort_key(choice: LLMChoice) -> tuple[int, int, float, float, float, int, int]:
         budget = _budget_status(choice, input_tokens, max_cost_usd)
         projected = budget.get("projected_cost_usd")
         route_history = _choice_route_history(history, role, choice)
@@ -1427,10 +1650,19 @@ def _role_policy_choices(
             else float("inf")
         )
         latency_p95 = route_history.get("successful_latency_p95_s") if route_history else None
+        if role in {"research_enhance", "plan_audit"}:
+            return (
+                1 if route_history and route_history.get("degraded") else 0,
+                0 if budget["eligible"] else 1,
+                -float(_role_quality_band(choice, role)),
+                float(_role_model_rank(choice, role)),
+                expected_total_cost,
+                int(float(latency_p95)) if latency_p95 is not None else 10**9,
+                choice.provider.priority,
+            )
         return (
             1 if route_history and route_history.get("degraded") else 0,
             0 if budget["eligible"] else 1,
-            0 if choice.provider.free else 1,
             expected_total_cost,
             float(latency_p95) if latency_p95 is not None else float("inf"),
             -float(_role_quality_band(choice, role)),
@@ -1438,7 +1670,8 @@ def _role_policy_choices(
             choice.provider.priority,
         )
 
-    return _dedupe_model_routes(sorted(choices, key=sort_key))
+    ordered = sorted(choices, key=sort_key)
+    return _dedupe_model_routes(ordered) if collapse_key_rotations else ordered
 
 
 def describe_providers(settings: Settings) -> list[dict[str, Any]]:
@@ -1551,6 +1784,182 @@ def route_status(settings: Settings) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def router_doctor(
+    settings: Settings,
+    *,
+    quality_target: str = "production",
+    paid_allowed: bool = False,
+    max_cost_usd: float | None = None,
+) -> dict[str, Any]:
+    """Explain local readiness and role gaps without making network calls."""
+    if quality_target not in QUALITY_TARGETS:
+        raise ValueError(f"不支持的质量档位：{quality_target}")
+    states = _load_route_state(settings)
+    evidence = _load_route_health(settings)
+    all_choices = configured_models(settings, only_free=False)
+    # Doctor must explain routes that normal execution intentionally excludes,
+    # especially unguarded trial quotas, so inspect declared text capability
+    # instead of starting from the already-filtered execution pool.
+    general_choices = [
+        choice for choice in all_choices if "qa" in _choice_task_types(choice)
+    ]
+    input_tokens = 512
+    role_rows: list[dict[str, Any]] = []
+    for role in ("plan", "research_enhance", "plan_audit", "execute", "audit", "verify"):
+        minimum_band = _minimum_role_quality_band(quality_target)
+        eligible = [
+            choice
+            for choice in _role_policy_choices(
+                settings,
+                role=role,
+                quality_target=quality_target,
+                input_tokens=input_tokens,
+                max_cost_usd=max_cost_usd,
+                paid_allowed=paid_allowed,
+                collapse_key_rotations=True,
+            )
+            if _is_execution_eligible_choice(settings, choice, states, evidence)
+            and _budget_status(choice, input_tokens, max_cost_usd)["eligible"]
+        ]
+        excluded: list[dict[str, Any]] = []
+        for choice in general_choices:
+            reasons: list[str] = []
+            band = _role_quality_band(choice, role)
+            if band < minimum_band:
+                reasons.append(f"role_quality_band_below_{minimum_band}")
+                if any(alias in PENDING_ROLE_CANDIDATES for alias in _role_model_aliases(choice)):
+                    reasons.append("pending_role_golden_gate")
+            if choice.provider.free and not _provider_execution_enabled(choice.provider):
+                reasons.append("trial_quota_guard_missing")
+            if not choice.provider.free and not paid_allowed:
+                reasons.append("paid_route_requires_opt_in")
+            if not _is_available(choice, states):
+                reasons.append("active_cooldown")
+            budget = _budget_status(choice, input_tokens, max_cost_usd)
+            if not budget["eligible"] and budget.get("reason"):
+                reasons.append(str(budget["reason"]))
+            if reasons:
+                excluded.append(
+                    {
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "free": choice.provider.free,
+                        "role_quality_band": band,
+                        "reasons": list(dict.fromkeys(reasons)),
+                    }
+                )
+        excluded.sort(
+            key=lambda row: (
+                0 if int(row["role_quality_band"]) >= minimum_band else 1,
+                0 if row["free"] else 1,
+                len(row["reasons"]),
+                -int(row["role_quality_band"]),
+                str(row["provider"]),
+                str(row["model"]),
+            )
+        )
+        selected = eligible[0] if eligible else None
+        role_rows.append(
+            {
+                "role": role,
+                "ready": bool(selected),
+                "minimum_role_quality_band": minimum_band,
+                "selected": (
+                    {
+                        "provider": selected.provider.name,
+                        "model": selected.model,
+                        "free": selected.provider.free,
+                        "role_quality_band": _role_quality_band(selected, role),
+                    }
+                    if selected
+                    else None
+                ),
+                "eligible_count": len(eligible),
+                "why_not": excluded[:12],
+            }
+        )
+
+    free_counts = Counter(
+        choice.provider.billing_class or "permanent_free"
+        for choice in all_choices
+        if choice.provider.free
+    )
+    rotation_groups = Counter(
+        (_model_family(choice), choice.model.lower()) for choice in all_choices
+    )
+    unguarded_trial_routes = [
+        choice
+        for choice in all_choices
+        if choice.provider.free
+        and choice.provider.billing_class == "trial_quota"
+        and not choice.provider.trial_quota_guarded
+    ]
+    recommendations: list[str] = []
+    if settings.configuration_warnings:
+        recommendations.append("repair_or_override_credential_catalog_path")
+    if unguarded_trial_routes:
+        recommendations.append("verify_hard_stop_before_enabling_trial_quota_routes")
+    blocked_roles = [row["role"] for row in role_rows if not row["ready"]]
+    if blocked_roles:
+        recommendations.append("qualify_free_role_candidates_or_explicitly_allow_budgeted_paid_routes")
+    if not all_choices:
+        recommendations.append("configure_at_least_one_provider")
+    if settings.runtime_fallback_reason:
+        recommendations.append("run_status_in_the_same_runtime_or_set_SMART_LLM_RUNTIME_DIR")
+
+    catalog = settings.credential_catalog
+    return {
+        "schema": "smart_llm_router.doctor.v1",
+        "generated_at": _now().isoformat(),
+        "status": (
+            "pass"
+            if all(row["ready"] for row in role_rows)
+            and not settings.configuration_warnings
+            else "needs_attention"
+        ),
+        "network_calls": 0,
+        "quality_target": quality_target,
+        "paid_allowed": paid_allowed,
+        "max_cost_usd": max_cost_usd,
+        "configuration": {
+            "warnings": list(settings.configuration_warnings),
+            "credential_catalog_loaded": bool(catalog),
+            "credential_catalog_path": catalog.path if catalog else None,
+            "credential_catalog_providers": list(catalog.providers) if catalog else [],
+            "credential_counts": dict(catalog.key_counts) if catalog else {},
+            "credential_catalog_sectioned": bool(catalog and catalog.sectioned),
+            "credential_counts_by_billing": [
+                {"billing_class": section, "provider": provider, "count": count}
+                for section, provider, count in (catalog.billing_key_counts if catalog else ())
+            ],
+            "credential_skipped_counts": [
+                {"billing_class": section, "provider": provider, "count": count}
+                for section, provider, count in (catalog.skipped_key_counts if catalog else ())
+            ],
+            "runtime_dir": str(settings.data_dir),
+            "runtime_dir_source": settings.runtime_dir_source,
+            "runtime_fallback_active": bool(settings.runtime_fallback_reason),
+            "runtime_fallback_reason": settings.runtime_fallback_reason,
+            "runtime_expected_dir": str(settings.runtime_expected_dir) if settings.runtime_expected_dir else None,
+            "budget_authority_dir": str(settings.budget_authority_dir),
+            "budget_authority_id": budget_authority_id(settings.budget_authority_dir),
+            "budget_authority_runtime_independent": settings.budget_authority_dir != settings.data_dir,
+            "legacy_budget_dirs": [str(path) for path in settings.legacy_budget_dirs],
+        },
+        "inventory": {
+            "provider_count": len(settings.providers),
+            "route_count": len(all_choices),
+            "general_text_route_count": len(general_choices),
+            "free_route_counts_by_billing_class": dict(sorted(free_counts.items())),
+            "unguarded_trial_route_count": len(unguarded_trial_routes),
+            "key_rotation_group_count": sum(1 for count in rotation_groups.values() if count > 1),
+        },
+        "roles": role_rows,
+        "blocked_roles": blocked_roles,
+        "recommendations": recommendations,
+    }
 
 
 def clear_route_state(settings: Settings) -> None:
@@ -1945,7 +2354,50 @@ def _cache_enabled() -> bool:
     return os.getenv("SMART_LLM_CACHE", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
-CACHE_POLICY_VERSION = "cache-policy-v2"
+CACHE_POLICY_VERSION = "cache-policy-v3"
+
+JSON_SCHEMA_SUBSET_KEYWORDS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$comment",
+        "title",
+        "description",
+        "default",
+        "examples",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "type",
+        "const",
+        "enum",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "not",
+        "properties",
+        "required",
+        "additionalProperties",
+        "minProperties",
+        "maxProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "minLength",
+        "maxLength",
+        "minimum",
+        "maximum",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+    }
+)
+JSON_SCHEMA_SUBSET_TYPES = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean", "null"}
+)
+JSON_SCHEMA_SUBSET_MAX_DEPTH = 16
+JSON_SCHEMA_SUBSET_MAX_NODES = 256
+JSON_SCHEMA_SUBSET_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 
 def _cache_key(
@@ -1964,9 +2416,17 @@ def _cache_key(
     privacy: str = "external_allowed",
     allow_external: bool = False,
     max_cost_usd: float | None = None,
+    max_output_tokens: int | None = None,
+    thinking_mode: str = "auto",
+    thinking_budget_tokens: int | None = None,
+    final_answer_reserve_tokens: int | None = None,
     complexity_label: str = "",
     complexity_source: str = "legacy",
     complexity_version: str = "",
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
 ) -> str:
     payload = {
         "cache_policy_version": CACHE_POLICY_VERSION,
@@ -1984,9 +2444,21 @@ def _cache_key(
         "privacy": privacy,
         "allow_external": allow_external,
         "max_cost_usd": max_cost_usd,
+        "max_output_tokens": max_output_tokens,
+        "thinking_mode": thinking_mode,
+        "thinking_budget_tokens": thinking_budget_tokens,
+        "final_answer_reserve_tokens": final_answer_reserve_tokens,
         "complexity_label": complexity_label,
         "complexity_source": complexity_source,
         "complexity_version": complexity_version,
+        "openrouter_upstream_providers": sorted(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        ),
+        "openrouter_allow_fallbacks": openrouter_allow_fallbacks,
+        "openrouter_require_zdr": openrouter_require_zdr,
+        "openrouter_deny_data_collection": openrouter_deny_data_collection,
     }
     return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -1997,21 +2469,507 @@ def _text_fingerprint(text: str | None) -> str:
     return sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def _required_structured_output_format(complexity: dict[str, Any], prompt: str) -> str | None:
-    features = complexity.get("shadow_descriptor_v2", {}).get("features", {})
-    if features.get("structured_output_required") and "json" in prompt.lower():
-        return "json"
+def _reject_nonfinite_json_constant(value: str) -> Any:
+    raise ValueError(f"nonfinite_json_constant:{value}")
+
+
+def _reject_duplicate_json_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate_json_object_key:{key}")
+        result[key] = value
+    return result
+
+
+def _strict_json_loads(text: str) -> Any:
+    return json.loads(
+        text,
+        parse_constant=_reject_nonfinite_json_constant,
+        object_pairs_hook=_reject_duplicate_json_pairs,
+    )
+
+
+def _json_value_equality_key(value: Any) -> tuple[Any, ...] | None:
+    """Return a hashable JSON Schema equality key; JSON numbers compare by value."""
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, int):
+        return ("number", Decimal(value))
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
+        return ("number", Decimal(str(value)))
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        children = [_json_value_equality_key(item) for item in value]
+        if any(child is None for child in children):
+            return None
+        return ("array", *children)
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            return None
+        children = [
+            (key, _json_value_equality_key(child))
+            for key, child in sorted(value.items())
+        ]
+        if any(child is None for _, child in children):
+            return None
+        return ("object", *children)
     return None
 
 
-def _validate_structured_output(content: str, required_format: str | None) -> tuple[bool, str | None]:
+def _json_value_fingerprint(value: Any) -> tuple[Any, ...] | None:
+    return _json_value_equality_key(value)
+
+
+def _json_schema_subset_error(
+    schema: Any,
+    *,
+    path: str = "$",
+    depth: int = 0,
+    nodes: list[int] | None = None,
+) -> str | None:
+    """Validate the bounded, dependency-free JSON Schema subset before use."""
+    if not isinstance(schema, dict):
+        return f"{path}:schema_must_be_object"
+    if depth > JSON_SCHEMA_SUBSET_MAX_DEPTH:
+        return f"{path}:schema_depth_exceeded"
+    if nodes is None:
+        nodes = [0]
+    nodes[0] += 1
+    if nodes[0] > JSON_SCHEMA_SUBSET_MAX_NODES:
+        return f"{path}:schema_node_limit_exceeded"
+    if any(not isinstance(keyword, str) for keyword in schema):
+        return f"{path}:schema_keyword_must_be_string"
+    unknown = sorted(set(schema) - JSON_SCHEMA_SUBSET_KEYWORDS)
+    if unknown:
+        return f"{path}:unsupported_keyword:{unknown[0]}"
+
+    for keyword in ("$schema", "$id", "$comment", "title", "description"):
+        if keyword in schema and not isinstance(schema[keyword], str):
+            return f"{path}:{keyword}_must_be_string"
+    dialect = schema.get("$schema")
+    if isinstance(dialect, str) and dialect.rstrip("#") != JSON_SCHEMA_SUBSET_DIALECT:
+        return f"{path}:unsupported_schema_dialect"
+    for keyword in ("deprecated", "readOnly", "writeOnly"):
+        if keyword in schema and not isinstance(schema[keyword], bool):
+            return f"{path}:{keyword}_must_be_boolean"
+    if "default" in schema and _json_value_fingerprint(schema["default"]) is None:
+        return f"{path}:default_must_be_finite_json"
+    if "examples" in schema:
+        examples = schema["examples"]
+        if not isinstance(examples, list) or any(_json_value_fingerprint(item) is None for item in examples):
+            return f"{path}:examples_must_be_finite_json_array"
+
+    expected_type = schema.get("type")
+    if isinstance(expected_type, str):
+        if expected_type not in JSON_SCHEMA_SUBSET_TYPES:
+            return f"{path}:unsupported_type:{expected_type}"
+    elif isinstance(expected_type, list):
+        if (
+            not expected_type
+            or any(not isinstance(item, str) or item not in JSON_SCHEMA_SUBSET_TYPES for item in expected_type)
+            or len(set(expected_type)) != len(expected_type)
+        ):
+            return f"{path}:type_array_invalid"
+    elif expected_type is not None:
+        return f"{path}:type_must_be_string_or_array"
+
+    if "const" in schema and _json_value_fingerprint(schema["const"]) is None:
+        return f"{path}:const_must_be_finite_json"
+    if "enum" in schema:
+        enum = schema["enum"]
+        fingerprints = [_json_value_fingerprint(item) for item in enum] if isinstance(enum, list) else []
+        if not isinstance(enum, list) or not enum or any(item is None for item in fingerprints):
+            return f"{path}:enum_must_be_nonempty_finite_json_array"
+        if len(set(fingerprints)) != len(fingerprints):
+            return f"{path}:enum_values_must_be_unique"
+
+    for keyword in ("minProperties", "maxProperties", "minItems", "maxItems", "minLength", "maxLength"):
+        value = schema.get(keyword)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            return f"{path}:{keyword}_must_be_nonnegative_integer"
+    for lower, upper in (
+        ("minProperties", "maxProperties"),
+        ("minItems", "maxItems"),
+        ("minLength", "maxLength"),
+    ):
+        if lower in schema and upper in schema and schema[lower] > schema[upper]:
+            return f"{path}:{lower}_exceeds_{upper}"
+    for keyword in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"):
+        value = schema.get(keyword)
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+        ):
+            return f"{path}:{keyword}_must_be_finite_number"
+    if "uniqueItems" in schema and not isinstance(schema["uniqueItems"], bool):
+        return f"{path}:uniqueItems_must_be_boolean"
+    if "additionalProperties" in schema and not isinstance(schema["additionalProperties"], bool):
+        return f"{path}:additionalProperties_schema_not_supported"
+
+    required = schema.get("required")
+    if required is not None and (
+        not isinstance(required, list)
+        or any(not isinstance(item, str) for item in required)
+        or len(set(required)) != len(required)
+    ):
+        return f"{path}:required_must_be_unique_string_array"
+
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            return f"{path}:properties_must_be_object"
+        for field, child in properties.items():
+            if not isinstance(field, str):
+                return f"{path}:property_name_must_be_string"
+            error = _json_schema_subset_error(
+                child,
+                path=f"{path}.properties.{field}",
+                depth=depth + 1,
+                nodes=nodes,
+            )
+            if error:
+                return error
+    items = schema.get("items")
+    if items is not None:
+        error = _json_schema_subset_error(items, path=f"{path}.items", depth=depth + 1, nodes=nodes)
+        if error:
+            return error
+    for keyword in ("allOf", "anyOf", "oneOf"):
+        children = schema.get(keyword)
+        if children is None:
+            continue
+        if not isinstance(children, list) or not children:
+            return f"{path}:{keyword}_must_be_nonempty_schema_array"
+        for index, child in enumerate(children):
+            error = _json_schema_subset_error(
+                child,
+                path=f"{path}.{keyword}[{index}]",
+                depth=depth + 1,
+                nodes=nodes,
+            )
+            if error:
+                return error
+    if "not" in schema:
+        error = _json_schema_subset_error(schema["not"], path=f"{path}.not", depth=depth + 1, nodes=nodes)
+        if error:
+            return error
+    return None
+
+
+def _required_structured_output_spec(
+    complexity: dict[str, Any],
+    prompt: str,
+    *,
+    task: str | None = None,
+    context: str | None = None,
+) -> dict[str, Any]:
+    features = complexity.get("shadow_descriptor_v2", {}).get("features", {})
+    combined = "\n".join(part for part in (prompt, context or "") if part)
+    lowered = combined.lower()
+    governed_role = normalize_task_type(task or "qa") in {"audit", "verify", "plan_audit"}
+    explicit_json = bool(
+        "json" in lowered
+        and (
+            features.get("structured_output_required")
+            or re.search(r"(?:json[- ]?only|only\s+(?:raw\s+)?json|strict\s+json|raw\s+json)", lowered)
+            or re.search(r"(?:\u53ea|\u4ec5|\u4e25\u683c|\u539f\u59cb).{0,12}json", lowered)
+        )
+    )
+    schema_driven = bool(
+        re.search(r"json\s*schema", lowered)
+        or re.search(r'"(?:\$schema|required|properties)"\s*:', combined)
+    )
+    schema: dict[str, Any] | None = None
+    if schema_driven:
+        decoder = json.JSONDecoder(
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+        marker = re.search(r"json\s*schema", combined, flags=re.IGNORECASE)
+        search_start = marker.end() if marker else 0
+        for match in re.finditer(r"\{", combined[search_start:]):
+            try:
+                candidate, _ = decoder.raw_decode(combined[search_start + match.start() :])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if isinstance(candidate, dict) and any(
+                key in candidate for key in ("$schema", "type", "properties", "required")
+            ):
+                schema = candidate
+                break
+    if schema_driven and schema is None:
+        raise ValueError("governed_json_schema_missing_or_invalid:blocked_before_send")
+    if schema is not None:
+        schema_error = _json_schema_subset_error(schema)
+        if schema_error:
+            raise ValueError(f"governed_json_schema_unsupported:{schema_error}:blocked_before_send")
+    required_fields = [
+        field
+        for field in ((schema or {}).get("required") or [])
+        if isinstance(field, str) and field
+    ]
+    required = governed_role or explicit_json or schema_driven
+    return {
+        "required": required,
+        "format": "json" if required else None,
+        "governed_role": governed_role,
+        "schema_driven": schema_driven,
+        "schema": schema,
+        "required_fields": required_fields,
+    }
+
+
+def _required_structured_output_format(complexity: dict[str, Any], prompt: str) -> str | None:
+    return _required_structured_output_spec(complexity, prompt)["format"]
+
+
+def _validate_structured_output(
+    content: str,
+    required_format: str | None,
+    *,
+    finish_reason: str | None = None,
+    output_reached_cap: bool = False,
+    required_fields: list[str] | tuple[str, ...] | None = None,
+    schema: dict[str, Any] | None = None,
+) -> tuple[bool, str | None]:
     if required_format != "json":
         return True, None
+    normalized_finish_reason = (finish_reason or "").strip().lower()
+    if normalized_finish_reason == "length":
+        return False, "structured_output_truncated_finish_reason_length"
+    if normalized_finish_reason and normalized_finish_reason != "stop":
+        return False, "structured_output_nonterminal_finish_reason"
+    stripped = content.strip()
+    if "```" in stripped:
+        return False, "structured_output_code_fence_forbidden"
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        if output_reached_cap:
+            return False, "structured_output_truncated_at_output_cap"
+        return False, "structured_output_not_one_complete_raw_json_object"
     try:
-        json.loads(content.strip())
-    except (json.JSONDecodeError, TypeError):
+        parsed = _strict_json_loads(stripped)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        if output_reached_cap:
+            return False, "structured_output_truncated_at_output_cap"
         return False, "strict_json_parse_failed"
+    if not isinstance(parsed, dict):
+        return False, "structured_output_root_must_be_object"
+    missing = [field for field in (required_fields or ()) if field not in parsed]
+    if missing:
+        return False, "structured_output_missing_required_fields"
+    if schema is not None and _json_schema_subset_error(schema):
+        return False, "structured_output_schema_unsupported"
+    if schema is not None and not _json_schema_required_fields_present(parsed, schema):
+        return False, "structured_output_missing_required_fields"
+    if schema is not None and not _json_schema_value_matches(parsed, schema):
+        return False, "structured_output_schema_validation_failed"
     return True, None
+
+
+def _json_schema_required_fields_present(value: Any, schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return True
+    required = schema.get("required")
+    properties = schema.get("properties")
+    if isinstance(required, list):
+        if not isinstance(value, dict):
+            return False
+        if any(isinstance(field, str) and field not in value for field in required):
+            return False
+    if isinstance(properties, dict) and isinstance(value, dict):
+        for field, child_schema in properties.items():
+            if field in value and not _json_schema_required_fields_present(value[field], child_schema):
+                return False
+    items = schema.get("items")
+    if isinstance(items, dict) and isinstance(value, list):
+        return all(_json_schema_required_fields_present(item, items) for item in value)
+    return True
+
+
+def _json_schema_type_matches(value: Any, expected_type: str) -> bool:
+    return {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "number": isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value)),
+        "integer": (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+        )
+        or (
+            isinstance(value, float)
+            and math.isfinite(value)
+            and value.is_integer()
+        ),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }.get(expected_type, False)
+
+
+def _json_schema_value_matches(value: Any, schema: Any) -> bool:
+    """Validate the deterministic JSON Schema subset used by governed tasks."""
+    if not isinstance(schema, dict):
+        return False
+    value_fingerprint = _json_value_fingerprint(value)
+    if value_fingerprint is None:
+        return False
+    if "const" in schema and value_fingerprint != _json_value_fingerprint(schema["const"]):
+        return False
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value_fingerprint not in {
+        _json_value_fingerprint(item) for item in enum
+    }:
+        return False
+    expected_type = schema.get("type")
+    if isinstance(expected_type, list):
+        if not any(_json_schema_type_matches(value, item) for item in expected_type):
+            return False
+    elif isinstance(expected_type, str):
+        if not _json_schema_type_matches(value, expected_type):
+            return False
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and not all(_json_schema_value_matches(value, child) for child in all_of):
+        return False
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and not any(_json_schema_value_matches(value, child) for child in any_of):
+        return False
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list) and sum(_json_schema_value_matches(value, child) for child in one_of) != 1:
+        return False
+    not_schema = schema.get("not")
+    if isinstance(not_schema, dict) and _json_schema_value_matches(value, not_schema):
+        return False
+    if isinstance(value, dict):
+        required = schema.get("required")
+        if isinstance(required, list) and any(field not in value for field in required):
+            return False
+        min_properties = schema.get("minProperties")
+        max_properties = schema.get("maxProperties")
+        if isinstance(min_properties, int) and len(value) < min_properties:
+            return False
+        if isinstance(max_properties, int) and len(value) > max_properties:
+            return False
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        if schema.get("additionalProperties") is False and any(key not in properties for key in value):
+            return False
+        for field, child_schema in properties.items():
+            if field in value and not _json_schema_value_matches(value[field], child_schema):
+                return False
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        max_items = schema.get("maxItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            return False
+        if isinstance(max_items, int) and len(value) > max_items:
+            return False
+        if schema.get("uniqueItems") is True:
+            item_fingerprints = [_json_value_fingerprint(item) for item in value]
+            if len(set(item_fingerprints)) != len(item_fingerprints):
+                return False
+        items = schema.get("items")
+        if isinstance(items, dict) and not all(_json_schema_value_matches(item, items) for item in value):
+            return False
+    if isinstance(value, str):
+        min_length = schema.get("minLength")
+        max_length = schema.get("maxLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            return False
+        if isinstance(max_length, int) and len(value) > max_length:
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not math.isfinite(float(value)):
+            return False
+        if "minimum" in schema and value < schema["minimum"]:
+            return False
+        if "maximum" in schema and value > schema["maximum"]:
+            return False
+        if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
+            return False
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            return False
+    return True
+
+
+def _structured_response_format(spec: dict[str, Any]) -> dict[str, Any] | None:
+    if spec.get("format") != "json":
+        return None
+    schema = spec.get("schema")
+    if isinstance(schema, dict):
+        schema_error = _json_schema_subset_error(schema)
+        if schema_error:
+            raise ValueError(f"governed_json_schema_unsupported:{schema_error}:blocked_before_send")
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "smart_llm_router_output",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+    return {"type": "json_object"}
+
+
+def _schema_required_field_count(schema: Any) -> int:
+    if not isinstance(schema, dict):
+        return 0
+    required = schema.get("required")
+    count = sum(1 for field in required if isinstance(field, str) and field) if isinstance(required, list) else 0
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        count += sum(_schema_required_field_count(child) for child in properties.values())
+    items = schema.get("items")
+    if isinstance(items, dict):
+        count += _schema_required_field_count(items)
+    return count
+
+
+def _sanitized_completion_metadata(usage: dict[str, Any]) -> dict[str, Any]:
+    metadata = usage.get("_completion_metadata")
+    if not isinstance(metadata, dict):
+        return {"finish_reason": None, "output_reached_requested_token_limit": False}
+    return {
+        "finish_reason": metadata.get("finish_reason"),
+        "output_reached_requested_token_limit": bool(metadata.get("output_reached_requested_token_limit")),
+    }
+
+
+def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
+    metadata = usage.get("_routing_metadata")
+    if not isinstance(metadata, dict):
+        return {
+            "openrouter_controls_applied": False,
+            "requested_upstream_providers": [],
+            "provider_fallbacks_allowed": True,
+            "zdr_required": False,
+            "data_collection_denied": False,
+            "structured_response_requested": False,
+            "served_provider": None,
+            "served_model": None,
+            "generation_id": None,
+        }
+    upstream = metadata.get("requested_upstream_providers")
+    return {
+        "openrouter_controls_applied": bool(metadata.get("openrouter_controls_applied")),
+        "requested_upstream_providers": [
+            str(item) for item in upstream if isinstance(item, str)
+        ] if isinstance(upstream, list) else [],
+        "provider_fallbacks_allowed": bool(metadata.get("provider_fallbacks_allowed", True)),
+        "zdr_required": bool(metadata.get("zdr_required")),
+        "data_collection_denied": bool(metadata.get("data_collection_denied")),
+        "structured_response_requested": bool(metadata.get("structured_response_requested")),
+        "served_provider": metadata.get("served_provider") if isinstance(metadata.get("served_provider"), str) else None,
+        "served_model": metadata.get("served_model") if isinstance(metadata.get("served_model"), str) else None,
+        "generation_id": metadata.get("generation_id") if isinstance(metadata.get("generation_id"), str) else None,
+    }
 
 
 def _load_response_cache(settings: Settings) -> dict[str, Any]:
@@ -2313,15 +3271,144 @@ def asr_status(settings: Settings | None = None) -> dict[str, Any]:
     }
 
 
-def _budget_status(choice: LLMChoice, input_tokens: int, max_cost_usd: float | None, output_tokens: int = 1024) -> dict[str, Any]:
-    projected = _estimated_cost_usd(choice, input_tokens, output_tokens)
+def _billable_output_reserve_tokens(choice: LLMChoice, output_tokens: int) -> int:
+    multiplier = MODEL_BILLABLE_OUTPUT_RESERVE_MULTIPLIER.get(choice.model.lower(), 1.0)
+    overhead = MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD.get(choice.model.lower(), 0)
+    return max(1, math.ceil(output_tokens * multiplier) + overhead)
+
+
+def _validate_budget_ceiling(value: float | None, *, name: str, strictly_positive: bool) -> float | None:
+    if value is None:
+        return None
+    try:
+        ceiling = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} 必须为有限数") from exc
+    if not math.isfinite(ceiling):
+        raise ValueError(f"{name} 必须为有限数")
+    if strictly_positive and ceiling <= 0:
+        raise ValueError(f"{name} 必须为有限正数")
+    if not strictly_positive and ceiling < 0:
+        raise ValueError(f"{name} 必须为有限非负数")
+    return ceiling
+
+
+def _validate_input_token_guard_factor(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        factor = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("input_token_guard_factor 必须为有限正数") from exc
+    minimum = max(
+        DEFAULT_PAID_INPUT_TOKEN_GUARD_FACTOR,
+        *PROVIDER_INPUT_TOKEN_GUARD_FACTORS.values(),
+        *MODEL_INPUT_TOKEN_GUARD_FACTORS.values(),
+    )
+    if not math.isfinite(factor) or factor <= 0:
+        raise ValueError("input_token_guard_factor 必须为有限正数")
+    if factor < minimum:
+        raise ValueError(f"input_token_guard_factor 不得低于当前安全下限 {minimum}")
+    return factor
+
+
+def _guarded_input_token_evidence(
+    choice: LLMChoice,
+    raw_input_tokens: int,
+    *,
+    guard_factor: float | None = None,
+) -> dict[str, Any]:
+    if isinstance(raw_input_tokens, bool) or not isinstance(raw_input_tokens, int):
+        raise ValueError("raw_input_tokens_est 必须为非负整数")
+    if raw_input_tokens < 0 or raw_input_tokens > MAX_GUARDED_INPUT_TOKENS:
+        raise ValueError("raw_input_tokens_est 超出安全范围")
+    explicit = _validate_input_token_guard_factor(guard_factor)
+    selected = max(
+        DEFAULT_PAID_INPUT_TOKEN_GUARD_FACTOR,
+        PROVIDER_INPUT_TOKEN_GUARD_FACTORS.get(choice.provider.name, 1.0),
+        MODEL_INPUT_TOKEN_GUARD_FACTORS.get(choice.model.lower(), 1.0),
+        explicit or 1.0,
+    )
+    overhead = MODEL_INPUT_TOKEN_GUARD_OVERHEAD.get(choice.model.lower(), 0)
+    if not math.isfinite(selected) or selected <= 0:
+        raise ValueError("输入 token 安全系数必须为有限正数")
+    try:
+        guarded_decimal = (
+            Decimal(raw_input_tokens) * Decimal(str(selected)) + Decimal(overhead)
+        ).to_integral_value(rounding=ROUND_CEILING)
+        guarded = int(guarded_decimal)
+    except (InvalidOperation, OverflowError, ValueError) as exc:
+        raise ValueError("guarded_input_tokens 计算失败") from exc
+    if guarded < raw_input_tokens or guarded > MAX_GUARDED_INPUT_TOKENS:
+        raise ValueError("guarded_input_tokens 超出安全范围")
+    return {
+        "raw_input_tokens_est": raw_input_tokens,
+        "guarded_input_tokens": guarded,
+        "guard_method": (
+            "provider_model_conservative_factor_plus_overhead"
+            if overhead
+            else "provider_model_conservative_factor"
+        ),
+        "guard_factor": selected,
+        "guard_overhead_tokens": overhead,
+    }
+
+
+def _budget_evidence_fields(budget: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "raw_input_tokens_est": budget.get("raw_input_tokens_est"),
+        "guarded_input_tokens": budget.get("guarded_input_tokens"),
+        "guard_method": budget.get("guard_method"),
+        "guard_factor": budget.get("guard_factor"),
+        "guard_overhead_tokens": budget.get("guard_overhead_tokens"),
+        "reserved_output_tokens": budget.get("reserved_output_tokens"),
+        "projected_cost_usd": budget.get("projected_cost_usd"),
+        "spend_ceiling_semantics": "local_forecast_guard_not_provider_enforced",
+        "settlement_usage_authority": "provider_reported_usage",
+    }
+
+
+def _budget_status(
+    choice: LLMChoice,
+    input_tokens: int,
+    max_cost_usd: float | None,
+    output_tokens: int = 1024,
+    *,
+    input_token_guard_factor: float | None = None,
+) -> dict[str, Any]:
+    reserved_output_tokens = (
+        _billable_output_reserve_tokens(choice, output_tokens)
+        if max_cost_usd is not None and not choice.provider.free
+        else output_tokens
+    )
+    token_evidence = (
+        _guarded_input_token_evidence(choice, input_tokens, guard_factor=input_token_guard_factor)
+        if max_cost_usd is not None and not choice.provider.free
+        else {
+            "raw_input_tokens_est": input_tokens,
+            "guarded_input_tokens": input_tokens,
+            "guard_method": "not_applied_free_or_unbudgeted",
+            "guard_factor": 1.0,
+            "guard_overhead_tokens": 0,
+        }
+    )
+    projected = _estimated_cost_usd(choice, token_evidence["guarded_input_tokens"], reserved_output_tokens)
+    base = {**token_evidence, "projected_cost_usd": projected, "reserved_output_tokens": reserved_output_tokens}
+    try:
+        max_cost_usd = _validate_budget_ceiling(
+            max_cost_usd,
+            name="max_cost_usd",
+            strictly_positive=False,
+        )
+    except ValueError:
+        return {**base, "eligible": False, "reason": "invalid_cost_limit_fails_closed"}
     if max_cost_usd is None or choice.provider.free:
-        return {"eligible": True, "projected_cost_usd": projected, "reason": None}
+        return {**base, "eligible": True, "reason": None}
     if projected is None:
-        return {"eligible": False, "projected_cost_usd": None, "reason": "unknown_price_fails_closed"}
+        return {**base, "eligible": False, "reason": "unknown_price_fails_closed"}
     if projected > max_cost_usd:
-        return {"eligible": False, "projected_cost_usd": projected, "reason": "projected_cost_exceeds_limit"}
-    return {"eligible": True, "projected_cost_usd": projected, "reason": None}
+        return {**base, "eligible": False, "reason": "projected_cost_exceeds_limit"}
+    return {**base, "eligible": True, "reason": None}
 
 
 def _max_output_tokens_for_budget(
@@ -2330,16 +3417,30 @@ def _max_output_tokens_for_budget(
     max_cost_usd: float | None,
     *,
     hard_cap: int = 4096,
+    input_token_guard_factor: float | None = None,
 ) -> int | None:
+    max_cost_usd = _validate_budget_ceiling(
+        max_cost_usd,
+        name="max_cost_usd",
+        strictly_positive=False,
+    )
     if max_cost_usd is None or choice.provider.free:
         return None
     input_price = _price_per_million(choice, "input")
     output_price = _price_per_million(choice, "output")
     if input_price is None or output_price is None or output_price <= 0:
         return None
-    input_cost = input_tokens * input_price / 1_000_000
+    guarded = _guarded_input_token_evidence(
+        choice,
+        input_tokens,
+        guard_factor=input_token_guard_factor,
+    )["guarded_input_tokens"]
+    input_cost = guarded * input_price / 1_000_000
     remaining = max(0.0, max_cost_usd - input_cost)
-    affordable = int(remaining * 1_000_000 / output_price * 0.95)
+    multiplier = MODEL_BILLABLE_OUTPUT_RESERVE_MULTIPLIER.get(choice.model.lower(), 1.0)
+    overhead = MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD.get(choice.model.lower(), 0)
+    affordable_envelope = int(remaining * 1_000_000 / output_price * 0.95)
+    affordable = int(max(0, affordable_envelope - overhead) / multiplier)
     return max(1, min(hard_cap, affordable))
 
 
@@ -2404,7 +3505,7 @@ def recommend_route(
             "max_cost_usd": max_cost_usd,
             "simple_tasks_disable_paid_by_default": True,
             "minimum_role_quality_band": minimum_role_band,
-            "role_selection_rule": "quality_floor_then_route_health_then_budget_then_free_then_retry_adjusted_cost_then_latency_then_quality_surplus",
+            "role_selection_rule": "complexity_sets_quality_floor_then_route_health_then_budget_then_retry_adjusted_expected_total_cost_then_latency",
             "historical_health_min_samples": ROUTE_HEALTH_MIN_SAMPLES,
             "infrastructure_failures_excluded_from_health": True,
             "role_tasks_force_paid": False,
@@ -2738,6 +3839,8 @@ def infer_task_descriptor(
 
 ROLE_STAGE_PURPOSE = {
     "plan": "目标拆解、架构取舍、验收与回退设计",
+    "research_enhance": "基于带URL和日期的互联网来源增量增强规划",
+    "plan_audit": "与规划和研究增强家族独立的可执行性挑战审计",
     "execute": "长链路实施、代码或知识工作产出",
     "audit": "跨厂商挑错、风险与遗漏审计",
     "verify": "从原始输入独立复验，不继承主结论",
@@ -2756,9 +3859,9 @@ def _build_role_pipeline(
     states = _load_route_state(settings)
     route_history = _route_history_map(settings)
     selected_by_role: dict[str, LLMChoice] = {}
-    independent_from = {"audit": "plan", "verify": "execute"}
+    independent_from = {"plan_audit": "research_enhance", "audit": "plan", "verify": "execute"}
     stages: list[dict[str, Any]] = []
-    for role in ("plan", "execute", "audit", "verify", "quality_enhance"):
+    for role in ("plan", "research_enhance", "plan_audit", "execute", "audit", "verify", "quality_enhance"):
         choices = [
             choice
             for choice in _role_policy_choices(
@@ -2793,7 +3896,7 @@ def _build_role_pipeline(
             selected["role_quality_band"] = _role_quality_band(selected_choice, role)
             selected["minimum_role_quality_band"] = _minimum_role_quality_band(quality_target)
             selected["history"] = _choice_route_history(route_history, role, selected_choice)
-            selected["selection_reason"] = "quality_floor_then_route_health_then_budget_then_free_then_retry_adjusted_cost_then_latency_then_quality_surplus"
+            selected["selection_reason"] = "complexity_sets_quality_floor_then_health_then_budget_then_retry_adjusted_expected_total_cost_then_latency"
             selected_by_role[role] = selected_choice
         stages.append(
             {
@@ -2804,7 +3907,7 @@ def _build_role_pipeline(
                 "candidates": candidate_rows[:6],
                 "quality_target": quality_target,
                 "minimum_role_quality_band": _minimum_role_quality_band(quality_target),
-                "selection_rule": "meet the target quality floor; then route health, budget eligibility, free, retry-adjusted cost, P95 latency, quality surplus, and stable tie-breakers",
+                "selection_rule": "complexity and requested quality set the floor; then route health, budget eligibility, retry-adjusted expected total cost, P95 latency, and stable tie-breakers; free wins only through zero expected monetary cost",
             }
         )
     return stages
@@ -3227,28 +4330,426 @@ def _local_ollama_reasoning_effort(choice: LLMChoice) -> str | None:
     return value
 
 
-def _call_openai_compatible(choice: LLMChoice, *, messages: list[dict[str, Any]], timeout: float, temperature: float, max_tokens: int | None = None) -> tuple[str, dict[str, Any]]:
+def _visible_message_text(value: Any) -> str:
+    """Extract only user-visible final text from OpenAI-compatible variants."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts = [_visible_message_text(item) for item in value]
+        return "\n".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        item_type = str(value.get("type") or "").lower()
+        if item_type in {"text", "output_text", "message"}:
+            for key in ("text", "content", "value"):
+                text = _visible_message_text(value.get(key))
+                if text:
+                    return text
+        # A few compatible gateways omit the type field for text blocks.
+        if not item_type:
+            for key in ("text", "content", "value"):
+                text = _visible_message_text(value.get(key))
+                if text:
+                    return text
+    return ""
+
+
+def _thinking_plan(
+    choice: LLMChoice,
+    *,
+    task: str,
+    total_output_tokens: int,
+    thinking_mode: str,
+    thinking_budget_tokens: int | None,
+    final_answer_reserve_tokens: int | None,
+) -> dict[str, Any]:
+    provider_family = _provider_family(choice.provider)
+    model = choice.model.lower()
+    is_qwen_hybrid = (
+        provider_family == "qwen"
+        and model in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD
+    )
+    is_deepseek_hybrid = (
+        provider_family in {"deepseek", "nvidia"}
+        and _is_deepseek_v4_choice(choice)
+    )
+    is_minimax_m3 = provider_family == "minimax" and model == "minimax-m3"
+    if not is_qwen_hybrid and not is_deepseek_hybrid and not is_minimax_m3:
+        return {
+            "mode": "unsupported",
+            "enable_thinking": None,
+            "thinking_budget_tokens": None,
+            "final_answer_reserve_tokens": total_output_tokens,
+            "total_output_tokens": total_output_tokens,
+        }
+    mode = thinking_mode
+    if is_minimax_m3:
+        if thinking_budget_tokens is not None:
+            raise RuntimeError("MiniMax-M3 不支持独立 thinking token budget。")
+        if mode == "auto" and final_answer_reserve_tokens is not None:
+            mode = "disabled"
+        if mode == "disabled":
+            return {
+                "mode": "disabled",
+                "thinking": {"type": "disabled"},
+                "enable_thinking": None,
+                "thinking_budget_tokens": 0,
+                "final_answer_reserve_tokens": total_output_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        if mode == "enabled" and final_answer_reserve_tokens is not None:
+            raise RuntimeError(
+                "MiniMax-M3 thinking=enabled 无法保证独立 final-answer reserve；"
+                "请改用 thinking_mode=disabled。"
+            )
+        return {
+            "mode": mode,
+            "thinking": {"type": "adaptive"} if mode == "enabled" else None,
+            "enable_thinking": None,
+            "thinking_budget_tokens": None,
+            "final_answer_reserve_tokens": None,
+            "total_output_tokens": total_output_tokens,
+        }
+    if is_deepseek_hybrid:
+        if thinking_budget_tokens is not None:
+            raise RuntimeError(
+                "DeepSeek Chat Completions 不支持独立 thinking token budget；"
+                "需要保证最终正文时请使用 thinking_mode=disabled。"
+            )
+        # DeepSeek exposes an enabled/disabled toggle, but no separate token
+        # ceiling for reasoning. In auto mode, a requested final-answer reserve
+        # therefore selects non-thinking mode so that the full output envelope
+        # is available to the user-visible answer.
+        if mode == "auto" and final_answer_reserve_tokens is not None:
+            mode = "disabled"
+        if mode == "disabled":
+            return {
+                "mode": "disabled",
+                "thinking": {"type": "disabled"},
+                "enable_thinking": None,
+                "thinking_budget_tokens": 0,
+                "final_answer_reserve_tokens": total_output_tokens,
+                "total_output_tokens": total_output_tokens,
+            }
+        if mode == "enabled" and final_answer_reserve_tokens is not None:
+            raise RuntimeError(
+                "DeepSeek thinking=enabled 无法保证独立 final-answer reserve；"
+                "请改用 thinking_mode=disabled。"
+            )
+        return {
+            "mode": mode,
+            "thinking": {"type": "enabled"} if mode == "enabled" else None,
+            "enable_thinking": None,
+            "thinking_budget_tokens": None,
+            "final_answer_reserve_tokens": None,
+            "total_output_tokens": total_output_tokens,
+        }
+    if mode == "auto" and task == "research_enhance":
+        mode = "enabled"
+    if mode == "disabled":
+        if thinking_budget_tokens is not None:
+            raise RuntimeError("禁用 thinking 时不能同时设置 thinking_budget_tokens。")
+        return {
+            "mode": "disabled",
+            "enable_thinking": False,
+            "thinking_budget_tokens": 0,
+            "final_answer_reserve_tokens": total_output_tokens,
+            "total_output_tokens": total_output_tokens,
+        }
+    if mode == "auto" and thinking_budget_tokens is None and final_answer_reserve_tokens is None:
+        return {
+            "mode": "auto",
+            "enable_thinking": None,
+            "thinking_budget_tokens": None,
+            "final_answer_reserve_tokens": None,
+            "total_output_tokens": total_output_tokens,
+        }
+    if total_output_tokens < 2:
+        raise RuntimeError("Qwen thinking 与最终正文分配至少需要 2 个输出 token。")
+    minimum_final = min(total_output_tokens - 1, max(1, max(128, total_output_tokens // 3)))
+    final_tokens = final_answer_reserve_tokens if final_answer_reserve_tokens is not None else minimum_final
+    reasoning_tokens = thinking_budget_tokens if thinking_budget_tokens is not None else total_output_tokens - final_tokens
+    if reasoning_tokens <= 0 or final_tokens <= 0:
+        raise RuntimeError("thinking 预算与最终正文预留都必须为正数。")
+    requested_total = reasoning_tokens + final_tokens
+    if requested_total > total_output_tokens:
+        raise RuntimeError("thinking_budget_tokens + final_answer_reserve_tokens 不能超过 max_output_tokens。")
+    return {
+        "mode": "enabled" if mode == "enabled" else "auto_bounded",
+        "enable_thinking": True,
+        "thinking_budget_tokens": reasoning_tokens,
+        "final_answer_reserve_tokens": final_tokens,
+        "total_output_tokens": requested_total,
+    }
+
+
+def _openrouter_request_policy_incompatibility_reason(
+    response: httpx.Response,
+    *,
+    is_openrouter: bool,
+    upstream_providers: tuple[str, ...],
+    allow_fallbacks: bool,
+    require_zdr: bool,
+    deny_data_collection: bool,
+    response_format: dict[str, Any] | None,
+) -> str | None:
+    """Classify only explicit request-constraint mismatches, never status alone."""
+    controls_requested = bool(
+        upstream_providers
+        or not allow_fallbacks
+        or require_zdr
+        or deny_data_collection
+        or response_format
+    )
+    if not is_openrouter or not controls_requested or response.status_code not in {400, 404, 422, 503}:
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        return None
+    normalized = " ".join(message.lower().split())[:1024]
+    metadata = error.get("metadata") if isinstance(error.get("metadata"), dict) else {}
+    error_type = metadata.get("error_type") or payload.get("error_type")
+    if error_type in {
+        "authentication",
+        "permission_denied",
+        "payment_required",
+        "rate_limit_exceeded",
+        "provider_overloaded",
+        "provider_unavailable",
+        "server",
+        "timeout",
+    }:
+        return None
+
+    no_endpoint_signal = "no endpoint" in normalized
+    routing_requirement_signal = any(
+        marker in normalized
+        for marker in (
+            "routing requirement",
+            "guardrail restriction",
+            "provider restriction",
+            "provider selection",
+        )
+    )
+    if require_zdr and any(
+        marker in normalized
+        for marker in ("zero data retention", "zdr", "data policy")
+    ):
+        return "zdr_constraint"
+    if deny_data_collection and any(
+        marker in normalized
+        for marker in ("data collection", "data policy", "retain", "training")
+    ):
+        return "data_collection_constraint"
+    if response_format is not None and any(
+        marker in normalized
+        for marker in (
+            "structured output",
+            "structured response",
+            "json schema",
+            "json_schema",
+            "response_format",
+            "required parameter",
+            "parameter support",
+        )
+    ):
+        return "structured_output_constraint"
+    if (upstream_providers or not allow_fallbacks) and (
+        routing_requirement_signal
+        or (
+            no_endpoint_signal
+            and any(marker in normalized for marker in ("requested provider", "allowed provider"))
+        )
+    ):
+        return "provider_selection_constraint"
+    if routing_requirement_signal and no_endpoint_signal:
+        return "routing_requirement_constraint"
+    return None
+
+
+def _call_openai_compatible(
+    choice: LLMChoice,
+    *,
+    messages: list[dict[str, Any]],
+    timeout: float,
+    temperature: float,
+    max_tokens: int | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget_tokens: int | None = None,
+    thinking: dict[str, str] | None = None,
+    response_format: dict[str, Any] | None = None,
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
+) -> tuple[str, dict[str, Any]]:
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
         raise RuntimeError(f"缺少 API key 环境变量：{choice.provider.api_key_env}")
-    payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": temperature}
+    effective_temperature = 1 if _model_family(choice) == "kimi" else temperature
+    payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": effective_temperature}
+    provider_family = _provider_family(choice.provider)
     if max_tokens:
-        payload["max_tokens"] = max_tokens
+        if provider_family == "minimax" or (
+            provider_family == "qwen" and choice.model.lower() in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD
+        ):
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["max_tokens"] = max_tokens
+    if provider_family == "minimax":
+        # MiniMax reasoning models can include private thinking in content.
+        # Split it into reasoning fields so the routed result contains only
+        # the user-visible final answer.
+        payload["reasoning_split"] = True
+    if enable_thinking is not None:
+        payload["enable_thinking"] = enable_thinking
+    if thinking_budget_tokens is not None:
+        payload["thinking_budget"] = thinking_budget_tokens
+    nvidia_deepseek_v4 = _is_nvidia_deepseek_v4_choice(choice)
+    if nvidia_deepseek_v4:
+        thinking_enabled = not thinking or thinking.get("type") != "disabled"
+        payload["chat_template_kwargs"] = {"thinking": thinking_enabled}
+        if thinking_enabled:
+            payload["chat_template_kwargs"]["reasoning_effort"] = "high"
+    elif thinking is not None:
+        payload["thinking"] = thinking
     reasoning_effort = _local_ollama_reasoning_effort(choice)
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort
+    is_openrouter = _provider_family(choice.provider) == "openrouter"
+    upstream_providers = tuple(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        )
+    )
+    openrouter_controls_requested = bool(
+        upstream_providers
+        or not openrouter_allow_fallbacks
+        or openrouter_require_zdr
+        or openrouter_deny_data_collection
+    )
+    if openrouter_controls_requested and not is_openrouter:
+        raise RuntimeError("OpenRouter 上游 provider/ZDR 控制只能用于 OpenRouter 路线。")
+    if response_format is not None and is_openrouter:
+        payload["response_format"] = response_format
+    provider_preferences: dict[str, Any] = {}
+    if upstream_providers:
+        provider_preferences["only"] = list(upstream_providers)
+    if not openrouter_allow_fallbacks:
+        provider_preferences["allow_fallbacks"] = False
+    if openrouter_require_zdr:
+        provider_preferences["zdr"] = True
+    if openrouter_deny_data_collection:
+        provider_preferences["data_collection"] = "deny"
+    if response_format is not None and is_openrouter:
+        provider_preferences["require_parameters"] = True
+    if provider_preferences:
+        payload["provider"] = provider_preferences
     with httpx.Client(timeout=timeout) as client:
         response = client.post(
             choice.provider.base_url.rstrip("/") + "/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=payload,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            policy_reason = _openrouter_request_policy_incompatibility_reason(
+                exc.response,
+                is_openrouter=is_openrouter,
+                upstream_providers=upstream_providers,
+                allow_fallbacks=openrouter_allow_fallbacks,
+                require_zdr=openrouter_require_zdr,
+                deny_data_collection=openrouter_deny_data_collection,
+                response_format=response_format,
+            )
+            if policy_reason:
+                raise RequestPolicyIncompatibility(
+                    int(exc.response.status_code),
+                    policy_reason,
+                ) from None
+            raise
         data = response.json()
-    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-    if not content:
-        raise RuntimeError(f"{choice.provider.name}/{choice.model} 返回内容为空")
+    if provider_family == "minimax":
+        base_resp = data.get("base_resp") if isinstance(data, dict) else None
+        raw_status = base_resp.get("status_code") if isinstance(base_resp, dict) else 0
+        try:
+            minimax_status = int(raw_status or 0)
+        except (TypeError, ValueError):
+            minimax_status = -1
+        if minimax_status != 0:
+            raise RuntimeError(f"minimax_api_error:{minimax_status}")
+    raw_served_model = data.get("model")
+    served_model = raw_served_model.strip() if isinstance(raw_served_model, str) else None
+    served_model = served_model or None
+    if nvidia_deepseek_v4 and served_model:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", served_model):
+            raise RuntimeError(
+                f"{choice.provider.name}/{choice.model} "
+                "model_substitution_detected:invalid_served_model"
+            )
+        served_choice = LLMChoice(choice.provider, served_model)
+        if not set(_role_model_aliases(choice)).intersection(_role_model_aliases(served_choice)):
+            raise RuntimeError(
+                f"{choice.provider.name}/{choice.model} model_substitution_detected:{served_model}"
+            )
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    usage = dict(usage)
+    first_choice = (data.get("choices") or [{}])[0]
+    message = first_choice.get("message") if isinstance(first_choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    raw_finish_reason = str(first_choice.get("finish_reason") or "").strip().lower()
+    finish_reason = raw_finish_reason if raw_finish_reason in {"stop", "length", "tool_calls", "function_call", "content_filter"} else ("other" if raw_finish_reason else None)
+    try:
+        completion_tokens = int(usage.get("completion_tokens") or 0)
+    except (TypeError, ValueError):
+        completion_tokens = 0
+    usage["_completion_metadata"] = {
+        "finish_reason": finish_reason,
+        "output_reached_requested_token_limit": bool(max_tokens is not None and completion_tokens >= max_tokens),
+    }
+    served_provider = data.get("provider")
+    if not isinstance(served_provider, str):
+        served_provider = None
+    try:
+        generation_id = response.headers.get("x-generation-id")
+    except (AttributeError, TypeError):
+        generation_id = None
+    if not isinstance(generation_id, str):
+        generation_id = None
+    usage["_routing_metadata"] = {
+        "openrouter_controls_applied": bool(is_openrouter and (provider_preferences or response_format)),
+        "requested_upstream_providers": list(upstream_providers),
+        "provider_fallbacks_allowed": openrouter_allow_fallbacks,
+        "zdr_required": openrouter_require_zdr,
+        "data_collection_denied": openrouter_deny_data_collection,
+        "structured_response_requested": response_format is not None and is_openrouter,
+        "served_provider": served_provider,
+        "served_model": served_model,
+        "generation_id": generation_id,
+    }
+    content = _visible_message_text(message.get("content"))
+    if not content:
+        reasoning_present = bool(
+            _visible_message_text(message.get("reasoning_content"))
+            or _visible_message_text(message.get("reasoning"))
+        )
+        raise InconclusiveModelOutput(
+            f"{choice.provider.name}/{choice.model}",
+            reasoning_present=reasoning_present,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
     return content, usage
 
 
@@ -3392,10 +4893,13 @@ def embed_texts(
     model: str | None = None,
     dimensions: int | None = None,
     timeout: float | None = None,
+    allow_paid: bool = False,
 ) -> dict[str, Any]:
     choices = _adapter_choices(settings, "embed", provider_name=provider, model=model)
+    if not allow_paid:
+        choices = [choice for choice in choices if _free_only_eligible_provider(choice.provider)]
     if not choices:
-        raise RuntimeError("没有可用 embedding adapter。请配置 zhipu-embedding-lowcost 等 provider block。")
+        raise RuntimeError("没有无需付费授权的 embedding adapter；付费路线必须显式使用 --allow-paid。")
     states = _load_route_state(settings)
     errors: list[str] = []
     for choice in choices:
@@ -3447,10 +4951,13 @@ def rerank_documents(
     return_documents: bool = True,
     return_raw_scores: bool = False,
     timeout: float | None = None,
+    allow_paid: bool = False,
 ) -> dict[str, Any]:
     choices = _adapter_choices(settings, "rerank", provider_name=provider, model=model)
+    if not allow_paid:
+        choices = [choice for choice in choices if _free_only_eligible_provider(choice.provider)]
     if not choices:
-        raise RuntimeError("没有可用 rerank adapter。请配置 zhipu-rerank-lowcost 等 provider block。")
+        raise RuntimeError("没有无需付费授权的 rerank adapter；付费路线必须显式使用 --allow-paid。")
     states = _load_route_state(settings)
     errors: list[str] = []
     for choice in choices:
@@ -3524,6 +5031,7 @@ def remote_transcribe_media(
     model: str | None = None,
     language: str = "zh",
     allow_external: bool = False,
+    allow_paid: bool = False,
     timeout: float | None = None,
 ) -> dict[str, Any]:
     if not allow_external:
@@ -3535,6 +5043,8 @@ def remote_transcribe_media(
     if not choices:
         raise RuntimeError("没有匹配且健康的远程 ASR adapter。")
     choice = choices[0]
+    if not _free_only_eligible_provider(choice.provider) and not allow_paid:
+        raise RuntimeError("远程 ASR 路线可能计费；必须显式传入 --allow-paid。")
     key = os.getenv(choice.provider.api_key_env, "").strip()
     family = _provider_family(choice.provider)
     request_timeout = timeout or max(settings.timeout, 120)
@@ -3670,33 +5180,167 @@ def _health_probe_tasks(tasks: list[str] | tuple[str, ...] | None) -> list[str]:
     return clean
 
 
-def refresh_model_pool(settings: Settings, *, include_paid: bool = False, timeout: float = 6.0, limit: int = 0) -> list[dict[str, Any]]:
+def _probe_chat_choice(
+    choice: LLMChoice,
+    *,
+    messages: list[dict[str, Any]],
+    timeout: float,
+) -> tuple[str, dict[str, Any], int]:
+    """Probe once, then give reasoning models enough room for a final answer."""
+    attempts = 0
+    for max_tokens in (96, 512):
+        attempts += 1
+        try:
+            content, usage = _call_openai_compatible(
+                choice,
+                messages=messages,
+                timeout=timeout,
+                temperature=0,
+                max_tokens=max_tokens,
+            )
+            return content, usage, attempts
+        except InconclusiveModelOutput:
+            if max_tokens == 512:
+                raise
+    raise AssertionError("unreachable")
+
+
+def _emit_refresh_progress(
+    callback: Callable[[dict[str, Any]], None] | None,
+    payload: dict[str, Any],
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(payload)
+    except Exception:
+        # Progress rendering must never change routing or health semantics.
+        pass
+
+
+def refresh_model_pool(
+    settings: Settings,
+    *,
+    include_paid: bool = False,
+    timeout: float = 6.0,
+    limit: int = 0,
+    task: str = "qa",
+    quality_target: str = "production",
+    include_unprotected_trial: bool = False,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
     states = _load_route_state(settings)
+    normalized_task = normalize_task_type(task)
+    if normalized_task in ROLE_TASKS:
+        choices = _role_policy_choices(
+            settings,
+            role=normalized_task,
+            quality_target=quality_target,
+            input_tokens=256,
+            max_cost_usd=None,
+            paid_allowed=include_paid,
+            collapse_key_rotations=False,
+        )
+    else:
+        choices = _model_choices(
+            settings,
+            task=normalized_task if normalized_task in TASK_TYPES else "qa",
+            only_free=not include_paid,
+        )
     choices = _rank_choices(
         [
             choice
-            for choice in configured_models(settings, only_free=not include_paid)
-            if _provider_execution_enabled(choice.provider)
+            for choice in choices
+            if include_unprotected_trial or _provider_execution_enabled(choice.provider)
         ],
-        "qa",
+        normalized_task,
     )
     if not include_paid:
         choices = [choice for choice in choices if choice.provider.free]
     if limit > 0:
         choices = choices[:limit]
-    rows = []
-    messages = [{"role": "system", "content": "只做模型连通性测试。"}, {"role": "user", "content": "只输出 OK 两个字。"}]
-    for choice in choices:
+    rows: list[dict[str, Any]] = []
+    messages = [
+        {"role": "system", "content": "只做模型连通性测试。不要输出思考过程。"},
+        {"role": "user", "content": "最终答案只输出 OK 两个字。"},
+    ]
+    report_path = _refresh_report_path(settings)
+    report: dict[str, Any] = {
+        "schema": "smart_llm_router.pool_refresh.v2",
+        "status": "running",
+        "started_at": _now().isoformat(),
+        "updated_at": _now().isoformat(),
+        "include_paid": include_paid,
+        "include_unprotected_trial": include_unprotected_trial,
+        "task": normalized_task,
+        "quality_target": quality_target,
+        "timeout": timeout,
+        "limit": limit,
+        "total": len(choices),
+        "completed": 0,
+        "results": rows,
+    }
+    _atomic_write_json(report_path, report)
+    for index, choice in enumerate(choices, 1):
         started = _now()
+        _emit_refresh_progress(
+            progress,
+            {
+                "event": "probe_started",
+                "index": index,
+                "total": len(choices),
+                "provider": choice.provider.name,
+                "model": choice.model,
+            },
+        )
         try:
-            content, _usage = _call_openai_compatible(choice, messages=messages, timeout=timeout, temperature=0, max_tokens=24)
+            content, _usage, attempts = _probe_chat_choice(
+                choice,
+                messages=messages,
+                timeout=timeout,
+            )
             _record_success(settings, choice, states)
-            rows.append({"provider": choice.provider.name, "model": choice.model, "free": choice.provider.free, "ok": True, "sample": content[:40], "checked_at": started.isoformat()})
+            row = {
+                "provider": choice.provider.name,
+                "model": choice.model,
+                "free": choice.provider.free,
+                "ok": True,
+                "endpoint_reachable": True,
+                "attempts": attempts,
+                "sample": content[:40],
+                "checked_at": started.isoformat(),
+            }
         except Exception as exc:
             _record_failure(settings, choice, states, exc)
-            rows.append({"provider": choice.provider.name, "model": choice.model, "free": choice.provider.free, "ok": False, "error": str(exc).replace("\n", " ")[:240], "checked_at": started.isoformat()})
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    _refresh_report_path(settings).write_text(json.dumps({"refreshed_at": _now().isoformat(), "include_paid": include_paid, "timeout": timeout, "limit": limit, "results": rows}, ensure_ascii=False, indent=2), encoding="utf-8")
+            row = {
+                "provider": choice.provider.name,
+                "model": choice.model,
+                "free": choice.provider.free,
+                "ok": False,
+                "endpoint_reachable": isinstance(exc, InconclusiveModelOutput),
+                "failure_class": "no_final_content" if isinstance(exc, InconclusiveModelOutput) else classify_route_failure(str(exc)),
+                "error": str(exc).replace("\n", " ")[:240],
+                "checked_at": started.isoformat(),
+            }
+        rows.append(row)
+        report["completed"] = index
+        report["updated_at"] = _now().isoformat()
+        _atomic_write_json(report_path, report)
+        _emit_refresh_progress(
+            progress,
+            {
+                "event": "probe_completed",
+                "index": index,
+                "total": len(choices),
+                "provider": choice.provider.name,
+                "model": choice.model,
+                "ok": row["ok"],
+            },
+        )
+    report["status"] = "complete"
+    report["completed_at"] = _now().isoformat()
+    report["updated_at"] = report["completed_at"]
+    _atomic_write_json(report_path, report)
     return rows
 
 
@@ -3708,6 +5352,7 @@ def refresh_model_pool_by_modality(
     limit: int = 0,
     tasks: list[str] | tuple[str, ...] | None = None,
     families: list[str] | tuple[str, ...] | None = None,
+    include_unprotected_trial: bool = False,
 ) -> dict[str, Any]:
     states = _load_route_state(settings)
     probe_tasks = _health_probe_tasks(tasks)
@@ -3715,6 +5360,7 @@ def refresh_model_pool_by_modality(
     report: dict[str, Any] = {
         "refreshed_at": _now().isoformat(),
         "include_paid": include_paid,
+        "include_unprotected_trial": include_unprotected_trial,
         "timeout": timeout,
         "limit_per_task": limit,
         "tasks": probe_tasks,
@@ -3727,6 +5373,8 @@ def refresh_model_pool_by_modality(
             choices = _model_choices(settings, task=task, only_free=not include_paid)
             if not include_paid:
                 choices = [choice for choice in choices if choice.provider.free]
+            if not include_unprotected_trial:
+                choices = [choice for choice in choices if _provider_execution_enabled(choice.provider)]
             if family_filter:
                 choices = [
                     choice
@@ -3781,11 +5429,41 @@ def refresh_model_pool_by_modality(
     return report
 
 
-def _maybe_refresh_when_free_pool_empty(settings: Settings, states: dict[str, RouteState], task: str) -> dict[str, RouteState]:
-    free_pool = _model_choices(settings, task=task, only_free=True)
+def _maybe_refresh_when_free_pool_empty(
+    settings: Settings,
+    states: dict[str, RouteState],
+    task: str,
+    *,
+    quality_target: str = "production",
+) -> dict[str, RouteState]:
+    normalized_task = normalize_task_type(task)
+    if normalized_task in ROLE_TASKS:
+        free_pool = _role_policy_choices(
+            settings,
+            role=normalized_task,
+            quality_target=quality_target,
+            input_tokens=256,
+            max_cost_usd=None,
+            paid_allowed=False,
+            collapse_key_rotations=False,
+        )
+    else:
+        free_pool = _model_choices(settings, task=normalized_task, only_free=True)
+    free_pool = [
+        choice for choice in free_pool if _provider_execution_enabled(choice.provider)
+    ]
     if any(_is_available(choice, states) for choice in free_pool):
         return states
-    refresh_model_pool(settings, include_paid=False, timeout=settings.empty_pool_refresh_timeout, limit=settings.empty_pool_refresh_limit)
+    if not free_pool:
+        return states
+    refresh_model_pool(
+        settings,
+        include_paid=False,
+        timeout=settings.empty_pool_refresh_timeout,
+        limit=settings.empty_pool_refresh_limit,
+        task=normalized_task,
+        quality_target=quality_target,
+    )
     return _load_route_state(settings)
 
 
@@ -3851,7 +5529,7 @@ def run_llm_task(
     prompt: str,
     context: str | None = None,
     prefer_free: bool = True,
-    paid_fallback: bool = True,
+    paid_fallback: bool = False,
     temperature: float = 0.2,
     max_context_chars: int | None = None,
     image_path: str | Path | None = None,
@@ -3864,18 +5542,94 @@ def run_llm_task(
     privacy: str = "auto",
     allow_external: bool = False,
     max_cost_usd: float | None = None,
+    max_output_tokens: int | None = None,
+    thinking_mode: str = "auto",
+    thinking_budget_tokens: int | None = None,
+    final_answer_reserve_tokens: int | None = None,
+    workflow_id: str | None = None,
+    workflow_max_cost_usd: float | None = None,
+    workflow_stage: str | None = None,
+    request_timeout: float | None = None,
+    allow_unqualified_explicit_route: bool = False,
+    allow_unprotected_trial_route: bool = False,
+    strict_controls: bool = False,
+    cache_enabled: bool | None = None,
+    input_token_guard_factor: float | None = None,
+    openrouter_upstream_providers: list[str] | tuple[str, ...] | None = None,
+    openrouter_allow_fallbacks: bool = True,
+    openrouter_require_zdr: bool = False,
+    openrouter_deny_data_collection: bool = False,
 ) -> LLMResult:
+    control_preflight = build_control_preflight(
+        strict_controls=strict_controls,
+        explicit_cache_enabled=cache_enabled,
+    )
+    effective_cache_enabled = control_preflight.effective_cache_enabled
+    max_cost_usd = _validate_budget_ceiling(
+        max_cost_usd,
+        name="max_cost_usd",
+        strictly_positive=False,
+    )
+    workflow_max_cost_usd = _validate_budget_ceiling(
+        workflow_max_cost_usd,
+        name="workflow_max_cost_usd",
+        strictly_positive=True,
+    )
+    input_token_guard_factor = _validate_input_token_guard_factor(input_token_guard_factor)
     task = normalize_task_type(task)
+    workflow_budget_dir = settings.budget_authority_dir
+    workflow_budget_authority_id = budget_authority_id(workflow_budget_dir)
     if quality_target not in QUALITY_TARGETS:
         raise ValueError(f"不支持的质量档位：{quality_target}")
-    if max_cost_usd is not None and max_cost_usd < 0:
-        raise ValueError("max_cost_usd 不能为负数")
+    if paid_fallback and max_cost_usd is None:
+        raise ValueError("程序接口启用付费路线时必须设置 max_cost_usd 单次硬上限")
+    if max_output_tokens is not None and max_output_tokens <= 0:
+        raise ValueError("max_output_tokens 必须为正数")
+    thinking_mode = thinking_mode.strip().lower()
+    if thinking_mode not in {"auto", "enabled", "disabled"}:
+        raise ValueError("thinking_mode 仅支持 auto、enabled 或 disabled")
+    if thinking_budget_tokens is not None and thinking_budget_tokens <= 0:
+        raise ValueError("thinking_budget_tokens 必须为正数")
+    if final_answer_reserve_tokens is not None and final_answer_reserve_tokens <= 0:
+        raise ValueError("final_answer_reserve_tokens 必须为正数")
+    if bool(workflow_id) != (workflow_max_cost_usd is not None):
+        raise ValueError("workflow_id 和 workflow_max_cost_usd 必须同时设置")
+    if workflow_id and max_cost_usd is None:
+        raise ValueError("工作流预算调用必须同时设置 max_cost_usd 单次硬上限")
+    if request_timeout is not None and request_timeout <= 0:
+        raise ValueError("request_timeout 必须为正数")
+    normalized_upstream_providers = tuple(
+        dict.fromkeys(
+            str(item).strip().lower()
+            for item in (openrouter_upstream_providers or ())
+            if str(item).strip()
+        )
+    )
+    invalid_upstream_providers = [
+        item
+        for item in normalized_upstream_providers
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", item)
+    ]
+    if invalid_upstream_providers:
+        raise ValueError("OpenRouter upstream provider 必须使用公开 provider slug。")
+    openrouter_controls_requested = bool(
+        normalized_upstream_providers
+        or not openrouter_allow_fallbacks
+        or openrouter_require_zdr
+        or openrouter_deny_data_collection
+    )
     if task in LOCAL_ONLY_TASKS:
         raise RuntimeError(f"任务 {task} 是本地专用流程；请使用 transcribe/asr-status 或 route-plan，而不是 chat 模型调用。")
     if task in {"embed", "rerank"}:
         raise RuntimeError(f"任务 {task} 已有专用 adapter；请使用 smart-llm-router {task} 命令，而不是通用 task/chat 调用。")
     if task in SPECIALIZED_TASKS:
         raise RuntimeError(f"任务 {task} 需要专用 provider adapter；当前只允许 capabilities/route-plan 规划，不直接走 chat/completions。")
+    no_think_marker = bool(re.search(r"(?<!\S)/no_think(?!\S)", prompt, flags=re.IGNORECASE))
+    if no_think_marker:
+        if thinking_mode == "enabled":
+            raise ValueError("/no_think 与 thinking_mode=enabled 不能同时使用")
+        thinking_mode = "disabled"
+        prompt = re.sub(r"(?<!\S)/no_think(?!\S)", " ", prompt, flags=re.IGNORECASE).strip()
     context = trim_context(context, max_context_chars)
     inferred_modalities = ["text", "image"] if image_path else ["text"]
     privacy_mode, privacy_reasons = _infer_privacy_mode(
@@ -3928,9 +5682,17 @@ def run_llm_task(
         privacy=privacy_mode,
         allow_external=allow_external,
         max_cost_usd=max_cost_usd,
+        max_output_tokens=max_output_tokens,
+        thinking_mode=thinking_mode,
+        thinking_budget_tokens=thinking_budget_tokens,
+        final_answer_reserve_tokens=final_answer_reserve_tokens,
         complexity_label=complexity["label"],
         complexity_source=complexity["complexity_source"],
         complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
+        openrouter_upstream_providers=normalized_upstream_providers,
+        openrouter_allow_fallbacks=openrouter_allow_fallbacks,
+        openrouter_require_zdr=openrouter_require_zdr,
+        openrouter_deny_data_collection=openrouter_deny_data_collection,
     )
     cache_debug = {
         "cache_key": cache_key[:16],
@@ -3945,10 +5707,36 @@ def run_llm_task(
         "privacy": privacy_mode,
         "privacy_reasons": privacy_reasons,
         "max_cost_usd": max_cost_usd,
+        "max_output_tokens": max_output_tokens,
+        "thinking_mode": thinking_mode,
+        "thinking_budget_tokens": thinking_budget_tokens,
+        "final_answer_reserve_tokens": final_answer_reserve_tokens,
+        "no_think_marker": no_think_marker,
+        "workflow_id": workflow_id,
+        "workflow_max_cost_usd": workflow_max_cost_usd,
+        "workflow_stage": workflow_stage,
+        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
         "preprocess": _preprocess_ledger_summary(preprocessing) if preprocessing else None,
+        "control_preflight": control_preflight.evidence(),
+        "openrouter_request_controls": {
+            "requested": openrouter_controls_requested,
+            "upstream_providers": list(normalized_upstream_providers),
+            "provider_fallbacks_allowed": openrouter_allow_fallbacks,
+            "zdr_required": openrouter_require_zdr,
+            "data_collection_denied": openrouter_deny_data_collection,
+        },
     }
-    required_output_format = _required_structured_output_format(complexity, prompt)
-    if _cache_enabled():
+    base_cache_evidence = {
+        "requested_cache_enabled": control_preflight.requested_cache_enabled,
+        "effective_cache_enabled": effective_cache_enabled,
+        "cache_control_source": control_preflight.cache_control_source,
+        "cache_hit": False,
+        "response_cache_persisted": False,
+    }
+    required_output_spec = _required_structured_output_spec(complexity, prompt, task=task, context=context)
+    required_output_format = required_output_spec["format"]
+    response_format = _structured_response_format(required_output_spec)
+    if effective_cache_enabled:
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
         cached_choice: LLMChoice | None = None
@@ -3989,7 +5777,12 @@ def run_llm_task(
                 _save_response_cache(settings, cache)
                 cached = None
         if isinstance(cached, dict) and cached.get("content"):
-            output_valid, output_error = _validate_structured_output(str(cached["content"]), required_output_format)
+            output_valid, output_error = _validate_structured_output(
+                str(cached["content"]),
+                required_output_format,
+                required_fields=required_output_spec["required_fields"],
+                schema=required_output_spec["schema"],
+            )
             if not output_valid:
                 _append_ledger(
                     settings,
@@ -4030,6 +5823,10 @@ def run_llm_task(
                     "privacy": privacy_mode,
                     "complexity": complexity,
                     "cache_debug": cache_debug,
+                    "cache_evidence": {
+                        **base_cache_evidence,
+                        "cache_hit": True,
+                    },
                     "input_tokens_est": 0,
                     "output_tokens_est": 0,
                     "estimated_cost_usd": 0.0,
@@ -4040,9 +5837,39 @@ def run_llm_task(
     if not local_only_enforced:
         _maybe_auto_discover_free_pool(settings)
     states = _load_route_state(settings)
-    if task in ROLE_TASKS:
+    if allow_unqualified_explicit_route:
+        if not provider or not model:
+            raise RuntimeError(
+                "未登记角色模型只允许由黄金集以精确 provider/model 显式调用。"
+            )
+        explicit_pool = [
+            choice
+            for choice in configured_models(settings, only_free=False)
+            if _adapter_lifecycle_route_allowed(settings, choice)
+            and task in _choice_task_types(choice)
+        ]
+        choices = _filter_choices(
+            explicit_pool,
+            provider=provider,
+            model=model,
+        )
+        choices = [
+            choice
+            for choice in choices
+            if choice.provider.free or paid_fallback
+        ]
+        if not choices:
+            raise RuntimeError(
+                f"黄金集没有解析到允许的候选路线：provider={provider} model={model}"
+            )
+    elif task in ROLE_TASKS:
         if prefer_free and not local_only_enforced:
-            states = _maybe_refresh_when_free_pool_empty(settings, states, task)
+            states = _maybe_refresh_when_free_pool_empty(
+                settings,
+                states,
+                task,
+                quality_target=quality_target,
+            )
         role_choices = [
             choice
             for choice in _role_policy_choices(
@@ -4053,6 +5880,10 @@ def run_llm_task(
                 max_cost_usd=max_cost_usd,
                 paid_allowed=paid_fallback,
                 history=_route_history_map(settings, task=task),
+                # Recommendations collapse duplicate model/key routes for
+                # readability. Execution must retain them so a throttled or
+                # invalid primary key can fall through to the next credential.
+                collapse_key_rotations=False,
             )
             if _is_available(choice, states)
         ]
@@ -4073,7 +5904,7 @@ def run_llm_task(
         ]
         choices = active_free + paid_pool
     else:
-        paid_pool = [
+        paid_pool = [] if not paid_fallback else [
             choice
             for choice in _paid_fallback_choices(settings, task, quality_target)
             if _is_available(choice, states)
@@ -4090,13 +5921,24 @@ def run_llm_task(
     choices = [
         choice
         for choice in choices
-        if _is_execution_eligible_choice(settings, choice, states, evidence)
+        if (
+            allow_unprotected_trial_route
+            and allow_unqualified_explicit_route
+            and choice.provider.free
+            and choice.provider.billing_class == "trial_quota"
+            and _is_available(choice, states)
+        )
+        or _is_execution_eligible_choice(settings, choice, states, evidence)
     ]
     if provider or model:
         filtered = _filter_choices(choices, provider=provider, model=model)
         if not filtered:
             raise RuntimeError(f"没有匹配 provider/model 过滤条件的可用模型：provider={provider or '-'} model={model or '-'}")
         choices = filtered
+    if openrouter_controls_requested:
+        choices = [choice for choice in choices if _provider_family(choice.provider) == "openrouter"]
+        if not choices:
+            raise RuntimeError("请求了 OpenRouter 上游 provider/ZDR 控制，但没有匹配的 OpenRouter 路线；已在发送前失败关闭。")
     preferred_choices, avoided_choices = _split_avoided_choices(choices, avoid_routes)
     if preferred_choices:
         choices = preferred_choices + avoided_choices
@@ -4107,28 +5949,231 @@ def run_llm_task(
     errors = []
     for choice in choices:
         started = time.perf_counter()
-        budget = _budget_status(choice, input_tokens_est, max_cost_usd)
+        budget_output_limit = _max_output_tokens_for_budget(
+            choice,
+            input_tokens_est,
+            max_cost_usd,
+            input_token_guard_factor=input_token_guard_factor,
+        )
+        requested_output_limit = max_output_tokens or budget_output_limit or 4096
+        thinking_plan = _thinking_plan(
+            choice,
+            task=task,
+            total_output_tokens=requested_output_limit,
+            thinking_mode=thinking_mode,
+            thinking_budget_tokens=thinking_budget_tokens,
+            final_answer_reserve_tokens=final_answer_reserve_tokens,
+        )
+        # The total reservation is the governed sum of reasoning and final
+        # answer allowances when the endpoint exposes separate controls.
+        reservation_output_limit = int(thinking_plan["total_output_tokens"])
+        budget = _budget_status(
+            choice,
+            input_tokens_est,
+            max_cost_usd,
+            output_tokens=reservation_output_limit,
+            input_token_guard_factor=input_token_guard_factor,
+        )
         if not budget["eligible"]:
+            incident = write_budget_incident(
+                settings.data_dir,
+                {
+                    "kind": "single_call_budget_reservation_rejected",
+                    "severity": "prevented",
+                    "workflow_id": workflow_id,
+                    "stage": workflow_stage,
+                    "provider": choice.provider.name,
+                    "model": choice.model,
+                    **_budget_evidence_fields(budget),
+                    "input_tokens_est": input_tokens_est,
+                    "requested_max_output_tokens": max_output_tokens,
+                    "reserved_output_tokens": budget.get("reserved_output_tokens"),
+                    "reserved_cost_usd": budget.get("projected_cost_usd"),
+                    "call_max_cost_usd": max_cost_usd,
+                    "reason": budget["reason"],
+                    "decision": "blocked_before_send",
+                },
+            )
+            _append_ledger(
+                settings,
+                {
+                    "created_at": _now().isoformat(),
+                    "event": "budget_incident",
+                    "incident_id": incident["incident_id"],
+                    "incident_path": incident["incident_path"],
+                    "incident_kind": incident["kind"],
+                    "task": task,
+                    "provider": choice.provider.name,
+                    "model": choice.model,
+                    "workflow_id": workflow_id,
+                    "workflow_stage": workflow_stage,
+                    "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                    "estimated_cost_usd": 0.0,
+                    "budget_forecast": _budget_evidence_fields(budget),
+                },
+            )
             errors.append(f"{choice.provider.name}/{choice.model}: budget gate {budget['reason']}")
             continue
+        effective_output_limit = reservation_output_limit
+        reserved_cost = float(budget.get("projected_cost_usd") or 0.0)
+        reservation: BudgetReservation | None = None
+        reservation_finalized = False
+        budget_incident_logged = False
         try:
+            if workflow_id and workflow_max_cost_usd is not None and max_cost_usd is not None and not choice.provider.free:
+                reservation = reserve_workflow_budget(
+                    workflow_budget_dir,
+                    workflow_id=workflow_id,
+                    workflow_max_cost_usd=workflow_max_cost_usd,
+                    call_max_cost_usd=max_cost_usd,
+                    reserved_cost_usd=reserved_cost,
+                    stage=workflow_stage,
+                    legacy_data_dirs=settings.legacy_budget_dirs,
+                )
+            call_options: dict[str, Any] = {}
+            if thinking_plan.get("enable_thinking") is not None:
+                call_options["enable_thinking"] = thinking_plan["enable_thinking"]
+            if thinking_plan.get("thinking_budget_tokens"):
+                call_options["thinking_budget_tokens"] = thinking_plan["thinking_budget_tokens"]
+            if thinking_plan.get("thinking") is not None:
+                call_options["thinking"] = thinking_plan["thinking"]
+            if response_format is not None:
+                call_options["response_format"] = response_format
+            if openrouter_controls_requested:
+                call_options.update(
+                    {
+                        "openrouter_upstream_providers": normalized_upstream_providers,
+                        "openrouter_allow_fallbacks": openrouter_allow_fallbacks,
+                        "openrouter_require_zdr": openrouter_require_zdr,
+                        "openrouter_deny_data_collection": openrouter_deny_data_collection,
+                    }
+                )
             content, usage = _call_openai_compatible(
                 choice,
                 messages=messages,
-                timeout=settings.timeout,
+                timeout=request_timeout or settings.timeout,
                 temperature=temperature,
-                max_tokens=_max_output_tokens_for_budget(choice, input_tokens_est, max_cost_usd),
+                max_tokens=effective_output_limit,
+                **call_options,
             )
             output_tokens_est = int(usage.get("completion_tokens") or _estimate_tokens(content))
+            completion_metadata = _sanitized_completion_metadata(usage)
+            routing_metadata = _sanitized_routing_metadata(usage)
+            completion_metadata["output_reached_requested_token_limit"] = bool(
+                completion_metadata["output_reached_requested_token_limit"]
+                or (effective_output_limit is not None and output_tokens_est >= effective_output_limit)
+            )
             input_tokens = int(usage.get("prompt_tokens") or input_tokens_est)
-            output_valid, output_error = _validate_structured_output(content, required_output_format)
-            if not output_valid:
-                errors.append(f"{choice.provider.name}/{choice.model}: {output_error}")
+            settled_cost = _estimated_cost_usd(choice, input_tokens, output_tokens_est)
+            incident: dict[str, Any] | None = None
+            budget_warning: dict[str, Any] | None = None
+            if reservation is not None and settled_cost is not None:
+                settlement_event = finalize_workflow_reservation(
+                    workflow_budget_dir,
+                    reservation,
+                    actual_or_estimated_cost_usd=settled_cost,
+                )
+                reservation_finalized = True
+                if settlement_event and settlement_event.get("decision") == "workflow_stopped":
+                    incident = settlement_event
+                elif settlement_event:
+                    budget_warning = settlement_event
+            elif max_cost_usd is not None and settled_cost is not None and settled_cost > max_cost_usd + 1e-12:
+                incident = write_budget_incident(
+                    settings.data_dir,
+                    {
+                        "kind": "single_call_hard_limit_overrun",
+                        "severity": "critical",
+                        "workflow_id": workflow_id,
+                        "stage": workflow_stage,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "reserved_cost_usd": reserved_cost,
+                        "actual_or_estimated_cost_usd": settled_cost,
+                        "call_max_cost_usd": max_cost_usd,
+                        "decision": "call_rejected_and_paid_routing_stopped",
+                    },
+                )
+            elif settled_cost is not None and settled_cost > reserved_cost + 1e-12:
+                budget_warning = write_budget_warning(
+                    settings.data_dir,
+                    {
+                        "kind": "reservation_estimate_variance",
+                        "severity": "warning",
+                        "workflow_id": workflow_id,
+                        "stage": workflow_stage,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "reserved_cost_usd": reserved_cost,
+                        "actual_or_estimated_cost_usd": settled_cost,
+                        "variance_usd": settled_cost - reserved_cost,
+                        "call_max_cost_usd": max_cost_usd,
+                        "decision": "continue_reconciled",
+                    },
+                )
+            if budget_warning is not None:
                 _append_ledger(
                     settings,
                     {
                         "created_at": _now().isoformat(),
-                        "event": "model_output_rejected",
+                        "event": "budget_warning",
+                        "warning_id": budget_warning["warning_id"],
+                        "warning_path": budget_warning["warning_path"],
+                        "warning_kind": budget_warning["kind"],
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "input_tokens_est": input_tokens,
+                        "output_tokens_est": output_tokens_est,
+                        "reserved_cost_usd": reserved_cost,
+                        "estimated_cost_usd": settled_cost,
+                        "budget_forecast": _budget_evidence_fields(budget),
+                        "variance_usd": budget_warning.get("variance_usd"),
+                        "decision": budget_warning.get("decision"),
+                    },
+                )
+            if incident is not None:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "budget_incident",
+                        "incident_id": incident["incident_id"],
+                        "incident_path": incident["incident_path"],
+                        "incident_kind": incident["kind"],
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "input_tokens_est": input_tokens,
+                        "output_tokens_est": output_tokens_est,
+                        "estimated_cost_usd": settled_cost,
+                    },
+                )
+                budget_incident_logged = True
+                raise BudgetLimitExceeded(
+                    f"付费调用超过硬预算上限，已生成事故 {incident['incident_id']} 并停止。",
+                    incident,
+                )
+            output_valid, output_error = _validate_structured_output(
+                content,
+                required_output_format,
+                finish_reason=completion_metadata["finish_reason"],
+                output_reached_cap=completion_metadata["output_reached_requested_token_limit"],
+                required_fields=required_output_spec["required_fields"],
+                schema=required_output_spec["schema"],
+            )
+            if not output_valid:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "invalid_structured_output",
                         "task": task,
                         "provider": choice.provider.name,
                         "model": choice.model,
@@ -4138,16 +6183,46 @@ def run_llm_task(
                         "privacy": privacy_mode,
                         "complexity": complexity,
                         "cache_debug": cache_debug,
+                        "cache_evidence": base_cache_evidence,
                         "required_output_format": required_output_format,
+                        "required_field_count": _schema_required_field_count(required_output_spec["schema"])
+                        or len(required_output_spec["required_fields"]),
                         "output_error": output_error,
+                        "completion_metadata": completion_metadata,
                         "latency_s": round(time.perf_counter() - started, 3),
                         "input_tokens_est": input_tokens,
                         "output_tokens_est": output_tokens_est,
-                        "estimated_cost_usd": _estimated_cost_usd(choice, input_tokens, output_tokens_est),
+                        "estimated_cost_usd": settled_cost,
+                        "reserved_cost_usd": reserved_cost,
+                        "budget_forecast": _budget_evidence_fields(budget),
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "settlement_basis": "provider_usage",
+                        "reservation_settled": reservation is None or reservation_finalized,
+                        "decision": "fail_closed_no_retry_no_fallback",
                     },
                 )
-                continue
+                raise GovernedInvalidOutput(
+                    f"{choice.provider.name}/{choice.model}: governed structured output invalid ({output_error})"
+                )
             _record_success(settings, choice, states)
+            response_cache_persisted = False
+            if effective_cache_enabled:
+                cache = _load_response_cache(settings)
+                cache[cache_key] = {
+                    "created_at": _now().isoformat(),
+                    "provider": choice.provider.name,
+                    "model": choice.model,
+                    "free": choice.provider.free,
+                    "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+                    "privacy": privacy_mode,
+                    "allow_external": allow_external,
+                    "cache_policy_version": CACHE_POLICY_VERSION,
+                    "content": content,
+                }
+                _save_response_cache(settings, cache)
+                response_cache_persisted = True
             ledger_id = _append_ledger(
                 settings,
                 {
@@ -4163,31 +6238,225 @@ def run_llm_task(
                     "max_cost_usd": max_cost_usd,
                     "complexity": complexity,
                     "cache_debug": cache_debug,
+                    "cache_evidence": {
+                        **base_cache_evidence,
+                        "response_cache_persisted": response_cache_persisted,
+                    },
                     "latency_s": round(time.perf_counter() - started, 3),
                     "input_tokens_est": input_tokens,
                     "output_tokens_est": output_tokens_est,
-                    "estimated_cost_usd": _estimated_cost_usd(choice, input_tokens, output_tokens_est),
+                    "estimated_cost_usd": settled_cost,
+                    "reserved_cost_usd": reserved_cost,
+                    "reserved_output_tokens": budget.get("reserved_output_tokens"),
+                    "budget_forecast": _budget_evidence_fields(budget),
+                    "thinking_plan": thinking_plan,
+                    "completion_metadata": completion_metadata,
+                    "routing_metadata": routing_metadata,
+                    "workflow_id": workflow_id,
+                    "workflow_stage": workflow_stage,
+                    "workflow_max_cost_usd": workflow_max_cost_usd,
+                    "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
                 },
             )
-            if _cache_enabled():
-                cache = _load_response_cache(settings)
-                cache[cache_key] = {
-                    "created_at": _now().isoformat(),
-                    "provider": choice.provider.name,
-                    "model": choice.model,
-                    "free": choice.provider.free,
-                    "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
-                    "privacy": privacy_mode,
-                    "allow_external": allow_external,
-                    "cache_policy_version": CACHE_POLICY_VERSION,
-                    "content": content,
-                }
-                _save_response_cache(settings, cache)
             return LLMResult(provider=choice.provider.name, model=choice.model, content=content, cached=False, complexity=complexity["label"], ledger_id=ledger_id)
+        except GovernedInvalidOutput as exc:
+            if reservation is not None and not reservation_finalized:
+                raise RuntimeError("invalid governed output left an unsettled workflow reservation") from exc
+            raise RuntimeError(str(exc)) from None
+        except BudgetLimitExceeded as exc:
+            if reservation is not None and not reservation_finalized:
+                release_workflow_reservation(workflow_budget_dir, reservation)
+            if not budget_incident_logged:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "budget_incident",
+                        "incident_id": exc.incident.get("incident_id"),
+                        "incident_path": exc.incident.get("incident_path"),
+                        "incident_kind": exc.incident.get("kind"),
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "estimated_cost_usd": 0.0,
+                    },
+                )
+            raise RuntimeError(str(exc)) from None
         except Exception as exc:
+            failure_usage = exc.usage if isinstance(exc, InconclusiveModelOutput) else {}
+            failure_input_tokens = int(failure_usage.get("prompt_tokens") or input_tokens_est)
+            failure_output_tokens = int(failure_usage.get("completion_tokens") or 0)
+            failure_usage_usable = any(
+                isinstance(failure_usage.get(field), (int, float))
+                and math.isfinite(float(failure_usage[field]))
+                and float(failure_usage[field]) > 0
+                for field in ("prompt_tokens", "completion_tokens")
+            )
+            failure_cost: float | None = None
+            failure_cost_basis: str | None = None
+            if not choice.provider.free and isinstance(exc, InconclusiveModelOutput):
+                if failure_usage_usable:
+                    failure_cost = _estimated_cost_usd(choice, failure_input_tokens, failure_output_tokens)
+                    failure_cost_basis = "provider_usage_on_rejected_output"
+                else:
+                    failure_output_tokens = int(budget.get("reserved_output_tokens") or effective_output_limit or 0)
+                    failure_cost = reserved_cost
+                    failure_cost_basis = "reserved_worst_case_without_provider_usage"
+            failure_incident: dict[str, Any] | None = None
+            failure_warning: dict[str, Any] | None = None
+            if reservation is not None and not reservation_finalized:
+                if failure_cost is not None:
+                    failure_settlement = finalize_workflow_reservation(
+                        workflow_budget_dir,
+                        reservation,
+                        actual_or_estimated_cost_usd=failure_cost,
+                    )
+                    reservation_finalized = True
+                    if failure_settlement and failure_settlement.get("decision") == "workflow_stopped":
+                        failure_incident = failure_settlement
+                    elif failure_settlement:
+                        failure_warning = failure_settlement
+                else:
+                    release_workflow_reservation(workflow_budget_dir, reservation)
+            elif failure_cost is not None and max_cost_usd is not None:
+                if failure_cost > max_cost_usd + 1e-12:
+                    failure_incident = write_budget_incident(
+                        settings.data_dir,
+                        {
+                            "kind": "single_call_hard_limit_overrun",
+                            "severity": "critical",
+                            "workflow_id": workflow_id,
+                            "stage": workflow_stage,
+                            "provider": choice.provider.name,
+                            "model": choice.model,
+                            "reserved_cost_usd": reserved_cost,
+                            "actual_or_estimated_cost_usd": failure_cost,
+                            "call_max_cost_usd": max_cost_usd,
+                            "decision": "call_rejected_and_paid_routing_stopped",
+                        },
+                    )
+                elif failure_cost > reserved_cost + 1e-12:
+                    failure_warning = write_budget_warning(
+                        settings.data_dir,
+                        {
+                            "kind": "reservation_estimate_variance",
+                            "severity": "warning",
+                            "workflow_id": workflow_id,
+                            "stage": workflow_stage,
+                            "provider": choice.provider.name,
+                            "model": choice.model,
+                            "reserved_cost_usd": reserved_cost,
+                            "actual_or_estimated_cost_usd": failure_cost,
+                            "variance_usd": failure_cost - reserved_cost,
+                            "call_max_cost_usd": max_cost_usd,
+                            "decision": "continue_reconciled",
+                        },
+                    )
+            if required_output_format == "json" and isinstance(exc, InconclusiveModelOutput):
+                failure_completion_metadata = _sanitized_completion_metadata(failure_usage)
+                if failure_completion_metadata["finish_reason"] is None:
+                    failure_completion_metadata["finish_reason"] = exc.finish_reason
+                if (
+                    not failure_completion_metadata["output_reached_requested_token_limit"]
+                    and failure_output_tokens >= effective_output_limit
+                ):
+                    failure_completion_metadata["output_reached_requested_token_limit"] = True
+                failure_output_error = (
+                    "structured_output_truncated_finish_reason_length"
+                    if (exc.finish_reason or "").strip().lower() == "length"
+                    else "structured_output_missing_final_content"
+                )
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "invalid_structured_output",
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "free": choice.provider.free,
+                        "billing_class": choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+                        "quality_target": quality_target,
+                        "privacy": privacy_mode,
+                        "complexity": complexity,
+                        "cache_debug": cache_debug,
+                        "cache_evidence": base_cache_evidence,
+                        "required_output_format": required_output_format,
+                        "required_field_count": _schema_required_field_count(required_output_spec["schema"])
+                        or len(required_output_spec["required_fields"]),
+                        "output_error": failure_output_error,
+                        "completion_metadata": failure_completion_metadata,
+                        "latency_s": round(time.perf_counter() - started, 3),
+                        "input_tokens_est": failure_input_tokens,
+                        "output_tokens_est": failure_output_tokens,
+                        "estimated_cost_usd": 0.0 if choice.provider.free else failure_cost,
+                        "reserved_cost_usd": reserved_cost,
+                        "budget_forecast": _budget_evidence_fields(budget),
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "settlement_basis": failure_cost_basis or "provider_usage",
+                        "reservation_settled": reservation is None or reservation_finalized,
+                        "decision": "fail_closed_no_retry_no_fallback",
+                    },
+                )
+                if failure_warning is not None:
+                    _append_ledger(
+                        settings,
+                        {
+                            "created_at": _now().isoformat(),
+                            "event": "budget_warning",
+                            "warning_id": failure_warning["warning_id"],
+                            "warning_path": failure_warning["warning_path"],
+                            "warning_kind": failure_warning["kind"],
+                            "task": task,
+                            "provider": choice.provider.name,
+                            "model": choice.model,
+                            "workflow_id": workflow_id,
+                            "workflow_stage": workflow_stage,
+                            "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                            "reserved_cost_usd": reserved_cost,
+                            "estimated_cost_usd": failure_cost,
+                            "variance_usd": failure_warning.get("variance_usd"),
+                            "decision": failure_warning.get("decision"),
+                        },
+                    )
+                if failure_incident is not None:
+                    _append_ledger(
+                        settings,
+                        {
+                            "created_at": _now().isoformat(),
+                            "event": "budget_incident",
+                            "incident_id": failure_incident["incident_id"],
+                            "incident_path": failure_incident["incident_path"],
+                            "incident_kind": failure_incident["kind"],
+                            "task": task,
+                            "provider": choice.provider.name,
+                            "model": choice.model,
+                            "workflow_id": workflow_id,
+                            "workflow_stage": workflow_stage,
+                            "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                            "estimated_cost_usd": failure_cost,
+                        },
+                    )
+                    raise RuntimeError(
+                        f"付费无效输出超过硬预算上限，已生成事故 {failure_incident['incident_id']} 并停止。"
+                    ) from None
+                raise RuntimeError(
+                    f"{choice.provider.name}/{choice.model}: governed structured output invalid ({failure_output_error})"
+                ) from None
             errors.append(f"{choice.provider.name}/{choice.model}: {exc}")
-            _record_failure(settings, choice, states, exc)
-            failure_class = classify_route_failure(str(exc))
+            health_cooldown_recorded = not isinstance(exc, RequestPolicyIncompatibility)
+            if health_cooldown_recorded:
+                _record_failure(settings, choice, states, exc)
+            failure_class = (
+                "request_policy_incompatible"
+                if isinstance(exc, RequestPolicyIncompatibility)
+                else classify_route_failure(str(exc))
+            )
             _append_ledger(
                 settings,
                 {
@@ -4199,14 +6468,68 @@ def run_llm_task(
                     "free": choice.provider.free,
                     "complexity": complexity,
                     "cache_debug": cache_debug,
+                    "cache_evidence": base_cache_evidence,
                     "latency_s": round(time.perf_counter() - started, 3),
-                    "input_tokens_est": input_tokens_est,
-                    "output_tokens_est": 0,
-                    "estimated_cost_usd": 0.0 if choice.provider.free else None,
+                    "input_tokens_est": failure_input_tokens,
+                    "output_tokens_est": failure_output_tokens,
+                    "estimated_cost_usd": 0.0 if choice.provider.free else failure_cost,
+                    "reserved_cost_usd": reserved_cost,
+                    "budget_forecast": _budget_evidence_fields(budget),
+                    "cost_basis": failure_cost_basis,
+                    "thinking_plan": thinking_plan,
+                    "workflow_id": workflow_id,
+                    "workflow_stage": workflow_stage,
+                    "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
                     "failure_class": failure_class,
+                    "health_cooldown_recorded": health_cooldown_recorded,
+                    "request_policy_reason": (
+                        exc.reason if isinstance(exc, RequestPolicyIncompatibility) else None
+                    ),
                     "error": str(exc).replace("\n", " ")[:240],
                 },
             )
+            if failure_warning is not None:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "budget_warning",
+                        "warning_id": failure_warning["warning_id"],
+                        "warning_path": failure_warning["warning_path"],
+                        "warning_kind": failure_warning["kind"],
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "reserved_cost_usd": reserved_cost,
+                        "estimated_cost_usd": failure_cost,
+                        "variance_usd": failure_warning.get("variance_usd"),
+                        "decision": failure_warning.get("decision"),
+                    },
+                )
+            if failure_incident is not None:
+                _append_ledger(
+                    settings,
+                    {
+                        "created_at": _now().isoformat(),
+                        "event": "budget_incident",
+                        "incident_id": failure_incident["incident_id"],
+                        "incident_path": failure_incident["incident_path"],
+                        "incident_kind": failure_incident["kind"],
+                        "task": task,
+                        "provider": choice.provider.name,
+                        "model": choice.model,
+                        "workflow_id": workflow_id,
+                        "workflow_stage": workflow_stage,
+                        "budget_authority_id": workflow_budget_authority_id if workflow_id else None,
+                        "estimated_cost_usd": failure_cost,
+                    },
+                )
+                raise RuntimeError(
+                    f"付费失败调用超过硬预算上限，已生成事故 {failure_incident['incident_id']} 并停止。"
+                ) from None
     raise RuntimeError("所有模型调用失败：" + "\n".join(errors))
 
 
@@ -4268,11 +6591,12 @@ def transcript_correct(
     output_dir: str | Path | None = None,
     domain: str = "general",
     chunk_chars: int = 3500,
-    free_only: bool = False,
+    free_only: bool = True,
     prefer_free: bool = True,
     cross_check: bool = False,
     quality_target: str = "production",
     max_context_chars: int | None = 7000,
+    max_cost_usd: float | None = None,
 ) -> dict[str, Any]:
     source = Path(input_file).expanduser()
     if not source.exists() or not source.is_file():
@@ -4308,6 +6632,7 @@ def transcript_correct(
             paid_fallback=not free_only,
             temperature=0.1,
             max_context_chars=max_context_chars,
+            max_cost_usd=max_cost_usd,
         )
         corrected = result.content.strip()
         row: dict[str, Any] = {
@@ -4326,7 +6651,7 @@ def transcript_correct(
                 prompt=check_prompt,
                 context=corrected,
                 prefer_free=True,
-                paid_fallback=not free_only,
+                paid_fallback=False,
                 temperature=0,
                 max_context_chars=max_context_chars,
             )
@@ -4366,6 +6691,7 @@ def transcript_correct(
             paid_allowed=not free_only,
             prefer_free=prefer_free,
             limit=8,
+            max_cost_usd=max_cost_usd,
         ),
     }
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -4838,8 +7164,20 @@ def maintain_pool(settings: Settings, *, include_paid: bool = False, timeout: fl
     _maintain_report_path(settings).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report
 
-def quick_vision_benchmark(settings: Settings, image_path: str | Path, *, timeout: float = 12.0, limit: int = 8) -> dict[str, Any]:
-    candidates = _rank_choices(configured_models(settings, only_free=True), "vision")[:limit]
+def quick_vision_benchmark(
+    settings: Settings,
+    image_path: str | Path,
+    *,
+    timeout: float = 12.0,
+    limit: int = 8,
+    include_unprotected_trial: bool = False,
+) -> dict[str, Any]:
+    candidates = [
+        choice
+        for choice in configured_models(settings, only_free=True)
+        if include_unprotected_trial or _provider_execution_enabled(choice.provider)
+    ]
+    candidates = _rank_choices(candidates, "vision")[:limit]
     prompt = "只输出 JSON，字段：has_hand(boolean), visible_parts(array), quality_issues(array), summary(string)。"
     result = {"created_at": _now().isoformat(), "image": str(image_path), "candidates": []}
     for choice in candidates:
@@ -4862,13 +7200,24 @@ def quick_vision_benchmark(settings: Settings, image_path: str | Path, *, timeou
     return result
 
 
-def quick_benchmark(settings: Settings, *, timeout: float = 8.0, limit: int = 12) -> dict[str, Any]:
+def quick_benchmark(
+    settings: Settings,
+    *,
+    timeout: float = 8.0,
+    limit: int = 12,
+    include_unprotected_trial: bool = False,
+) -> dict[str, Any]:
     tasks = {
         "smoke": "只输出 OK。",
         "classify": "只输出 JSON：判断《分布式缓存故障复盘》属于架构、运维还是测试，字段 domain, keywords, confidence。",
         "clean": "清洗 OCR：服務狀態 正常，緩存命中率 穩定；請 保 留 原 意。",
     }
-    candidates = _rank_choices(configured_models(settings, only_free=True), "qa")[:limit]
+    candidates = [
+        choice
+        for choice in configured_models(settings, only_free=True)
+        if include_unprotected_trial or _provider_execution_enabled(choice.provider)
+    ]
+    candidates = _rank_choices(candidates, "qa")[:limit]
     result = {"created_at": _now().isoformat(), "candidates": []}
     for choice in candidates:
         item: dict[str, Any] = {"provider": choice.provider.name, "model": choice.model, "tasks": {}}
