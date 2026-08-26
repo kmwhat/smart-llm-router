@@ -3,10 +3,16 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.0 stable release consolidates the budget-guarded China-region MiniMax paid
+The 0.9.1 patch release preserves settled provider and baseline costs when a
+golden-evaluation call fails, including budget-warning outcomes, without double
+counting. It also pins third-party GitHub Actions to full commit SHAs. Provider
+routes, role-quality bands, privacy policy, paid authorization, and task
+descriptor defaults are unchanged from 0.9.0.
+
+The 0.9.0 stable release consolidated the budget-guarded China-region MiniMax paid
 text route and section-aware credential-catalog loading that excludes unfunded
 paid credentials from executable slots. MiniMax has no production role-quality
-promotion in this release. It includes the 0.9.0rc3 launcher source-isolation
+promotion in that release. It includes the 0.9.0rc3 launcher source-isolation
 repair, the 0.9.0rc2 NVIDIA-hosted DeepSeek V4
 request compatibility and served-model identity validation, plus the 0.9.0rc1
 request-scoped OpenRouter upstream controls, fail-closed
@@ -137,13 +143,13 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.0` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
+`0.9.1` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
 会暂时不可用；此时请等待发布门完成，或按下一节从源码验证，不要改用旧版本链接：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.0/smart_llm_router-0.9.0-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.1/smart_llm_router-0.9.1-py3-none-any.whl"
 smart-llm-router --help
 ```
 

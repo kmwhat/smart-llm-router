@@ -1,5 +1,26 @@
 # Public Release Readiness
 
+## 0.9.1 Stable Release — 2026-08-27
+
+Status: clean patch-release candidate only. Protected pull request and CI,
+independent review, exact merged-main verification, tag, publication, registry
+acceptance, and runtime projection remain separately gated; this repository
+document does not claim that those later gates ran.
+
+- Package metadata, runtime version, README, changelog, CLI, and the canonical
+  GitHub wheel URL identify `0.9.1`.
+- Golden evaluation retains the settled monetary cost of a terminal failed
+  provider or baseline call, including budget-warning outcomes, without double
+  counting or continuing unnecessary candidate cases.
+- Third-party GitHub Actions are pinned to full commit SHAs and protected by a
+  repository regression test.
+- Provider routes, production role-quality bands, privacy policy, paid
+  authorization, and task descriptor defaults are unchanged from `0.9.0`.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+- Provider calls, merge, tag creation, publication, accepted-registry changes,
+  and Codex/Hermes runtime projection remain outside this candidate gate.
+
 ## 0.9.0 Stable Release — 2026-08-11
 
 Status: stable artifact identity frozen. Protected pull request, CI, tag,
