@@ -260,6 +260,70 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report["candidate"]["results"][1]["error"], "skipped_after_route_failure")
         self.assertEqual(report["baseline_status"], "skipped_candidate_hard_gate")
 
+    def test_failed_but_settled_baseline_cost_is_included(self) -> None:
+        suite_path = self.root / "suite.json"
+        suite_path.write_text(json.dumps(self._suite(), ensure_ascii=False), encoding="utf-8")
+        baseline_calls = 0
+
+        def fake_run(_settings: Settings, **kwargs: object) -> LLMResult:
+            nonlocal baseline_calls
+            provider = str(kwargs["provider"])
+            model = str(kwargs["model"])
+            if provider == "qwen-free":
+                cost = 0.0
+                content = '{"issues": ["risk"], "recommendations": ["fix"]}'
+            else:
+                baseline_calls += 1
+                cost = 0.0001 if baseline_calls == 1 else 0.0002
+                content = '{"issues": ["risk"], "recommendations": ["fix"]}'
+            event = "invalid_structured_output" if provider != "qwen-free" and baseline_calls == 2 else "model_call"
+            ledger_id = _append_ledger(
+                self.settings,
+                {
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "event": event,
+                    "task": "audit",
+                    "provider": provider,
+                    "model": model,
+                    "latency_s": 0.5,
+                    "estimated_cost_usd": cost,
+                    "reservation_settled": event == "invalid_structured_output",
+                },
+            )
+            if event == "invalid_structured_output":
+                raise RuntimeError("governed structured output invalid")
+            return LLMResult(provider=provider, model=model, content=content, ledger_id=ledger_id)
+
+        env = {"QWEN_KEY": "test", "DEEPSEEK_KEY": "test"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("smart_llm_router.evaluation.run_llm_task", side_effect=fake_run):
+                manifest = run_golden_evaluation(
+                    self.settings,
+                    suite_path=suite_path,
+                    candidate_provider="qwen-free",
+                    candidate_model="qwen-plus-latest",
+                    baseline_provider="deepseek-direct-paid",
+                    baseline_model="deepseek-v4-pro",
+                    output_dir=self.root / "evaluations",
+                    allow_paid=True,
+                )
+
+        report = json.loads(Path(manifest["report_path"]).read_text(encoding="utf-8"))
+        baseline = report["baseline"]
+        self.assertEqual(baseline["attempted_calls"], 2)
+        self.assertEqual(baseline["successful_calls"], 1)
+        self.assertEqual(baseline["ledger_accounted_calls"], 2)
+        self.assertEqual(baseline["failed_settled_calls"], 1)
+        self.assertEqual(baseline["unknown_cost_calls"], 0)
+        self.assertEqual(baseline["total_estimated_cost_usd"], 0.0003)
+        self.assertEqual(baseline["failed_estimated_cost_usd"], 0.0002)
+        failed = baseline["results"][1]
+        self.assertFalse(failed["call_ok"])
+        self.assertEqual(failed["ledger_event"], "invalid_structured_output")
+        self.assertIsNotNone(failed["ledger_id"])
+        self.assertEqual(failed["estimated_cost_usd"], 0.0002)
+        self.assertEqual(baseline["results"][2]["error"], "skipped_after_route_failure")
+
     def test_hard_gate_failure_skips_unnecessary_blind_review(self) -> None:
         report = {
             "schema": "smart_llm_router.golden_report.v1",

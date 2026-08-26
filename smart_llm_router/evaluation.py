@@ -289,6 +289,28 @@ def _ledger_row(settings: Settings, ledger_id: str | None) -> dict[str, Any] | N
     return next((row for row in reversed(read_cost_ledger(settings, limit=0)) if row.get("id") == ledger_id), None)
 
 
+def _new_route_terminal_ledger_row(
+    settings: Settings,
+    *,
+    prior_ledger_ids: set[str],
+    task: str,
+    route: dict[str, Any],
+) -> dict[str, Any] | None:
+    terminal_events = {"model_call", "model_failure", "invalid_structured_output", "budget_incident"}
+    for row in reversed(read_cost_ledger(settings, limit=0)):
+        ledger_id = str(row.get("id") or "")
+        if not ledger_id or ledger_id in prior_ledger_ids:
+            continue
+        if row.get("event") not in terminal_events:
+            continue
+        if row.get("task") != task:
+            continue
+        if row.get("provider") != route["provider"] or row.get("model") != route["model"]:
+            continue
+        return row
+    return None
+
+
 def _run_route_cases(
     settings: Settings,
     *,
@@ -321,6 +343,11 @@ def _run_route_cases(
                     }
                 )
                 continue
+            prior_ledger_ids = {
+                str(row.get("id"))
+                for row in read_cost_ledger(settings, limit=0)
+                if row.get("id")
+            }
             try:
                 result = run_llm_task(
                     settings,
@@ -355,11 +382,19 @@ def _run_route_cases(
                         "assertions": assertions,
                         "output": result.content,
                         "ledger_id": result.ledger_id,
+                        "ledger_event": ledger.get("event"),
+                        "reservation_settled": ledger.get("reservation_settled"),
                         "latency_s": ledger.get("latency_s"),
                         "estimated_cost_usd": ledger.get("estimated_cost_usd"),
                     }
                 )
             except Exception as exc:
+                ledger = _new_route_terminal_ledger_row(
+                    settings,
+                    prior_ledger_ids=prior_ledger_ids,
+                    task=suite["task"],
+                    route=route,
+                ) or {}
                 results.append(
                     {
                         "case_id": case["id"],
@@ -368,9 +403,11 @@ def _run_route_cases(
                         "assertions": [],
                         "output": "",
                         "error": str(exc).replace("\n", " ")[:500],
-                        "ledger_id": None,
-                        "latency_s": None,
-                        "estimated_cost_usd": None,
+                        "ledger_id": ledger.get("id"),
+                        "ledger_event": ledger.get("event"),
+                        "reservation_settled": ledger.get("reservation_settled"),
+                        "latency_s": ledger.get("latency_s"),
+                        "estimated_cost_usd": ledger.get("estimated_cost_usd"),
                     }
                 )
                 route_failed = stop_on_call_failure
@@ -381,16 +418,34 @@ def _run_route_cases(
             os.environ["SMART_LLM_CACHE"] = previous_cache
     successful = sum(1 for item in results if item["call_ok"])
     passed = sum(1 for item in results if item["case_passed"])
-    costs = [float(item["estimated_cost_usd"]) for item in results if isinstance(item.get("estimated_cost_usd"), (int, float))]
+    attempted_results = [item for item in results if item.get("error") != "skipped_after_route_failure"]
+    costs = [float(item["estimated_cost_usd"]) for item in attempted_results if isinstance(item.get("estimated_cost_usd"), (int, float))]
+    failed_costs = [
+        float(item["estimated_cost_usd"])
+        for item in attempted_results
+        if not item["call_ok"] and isinstance(item.get("estimated_cost_usd"), (int, float))
+    ]
     latencies = [float(item["latency_s"]) for item in results if isinstance(item.get("latency_s"), (int, float))]
     return {
         **route,
         "case_count": len(results),
+        "attempted_calls": len(attempted_results),
         "successful_calls": successful,
         "passed_cases": passed,
         "case_pass_rate": round(passed / len(results), 4) if results else 0.0,
         "total_estimated_cost_usd": round(sum(costs), 8),
-        "unknown_cost_calls": successful - len(costs),
+        "failed_estimated_cost_usd": round(sum(failed_costs), 8),
+        "ledger_accounted_calls": sum(1 for item in attempted_results if item.get("ledger_id")),
+        "failed_settled_calls": sum(
+            1
+            for item in attempted_results
+            if not item["call_ok"]
+            and isinstance(item.get("estimated_cost_usd"), (int, float))
+            and item.get("reservation_settled") is True
+        ),
+        "unknown_cost_calls": sum(
+            1 for item in attempted_results if not isinstance(item.get("estimated_cost_usd"), (int, float))
+        ),
         "mean_latency_s": round(sum(latencies) / len(latencies), 3) if latencies else None,
         "results": results,
     }
