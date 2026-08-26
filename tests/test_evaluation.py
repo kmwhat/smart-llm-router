@@ -258,6 +258,9 @@ class EvaluationTests(unittest.TestCase):
         report = json.loads(Path(manifest["report_path"]).read_text(encoding="utf-8"))
         self.assertEqual(run.call_count, 1)
         self.assertEqual(report["candidate"]["results"][1]["error"], "skipped_after_route_failure")
+        self.assertEqual(report["candidate"]["attempted_calls"], 1)
+        self.assertEqual(report["candidate"]["ledger_accounted_calls"], 0)
+        self.assertEqual(report["candidate"]["unknown_cost_calls"], 1)
         self.assertEqual(report["baseline_status"], "skipped_candidate_hard_gate")
 
     def test_failed_but_settled_baseline_cost_is_included(self) -> None:
@@ -277,6 +280,18 @@ class EvaluationTests(unittest.TestCase):
                 cost = 0.0001 if baseline_calls == 1 else 0.0002
                 content = '{"issues": ["risk"], "recommendations": ["fix"]}'
             event = "invalid_structured_output" if provider != "qwen-free" and baseline_calls == 2 else "model_call"
+            if event == "invalid_structured_output":
+                _append_ledger(
+                    self.settings,
+                    {
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "event": "budget_warning",
+                        "task": "audit",
+                        "provider": provider,
+                        "model": model,
+                        "estimated_cost_usd": cost,
+                    },
+                )
             ledger_id = _append_ledger(
                 self.settings,
                 {
