@@ -1068,6 +1068,16 @@ def _route_health_snapshot(
     }
 
 
+def _route_health_sort_rank(
+    settings: Settings,
+    choice: LLMChoice,
+    states: dict[str, RouteState],
+    evidence: dict[str, RouteHealthEvidence],
+) -> int:
+    status = _route_health_snapshot(settings, choice, states, evidence)["health_status"]
+    return {"healthy": 0, "unknown": 1, "unhealthy": 2}.get(status, 2)
+
+
 def _is_declared_choice(settings: Settings, choice: LLMChoice) -> bool:
     return any(
         provider.name == choice.provider.name and choice.model in provider.models
@@ -1589,7 +1599,17 @@ def _paid_fallback_choices(settings: Settings, task: str, quality_target: str = 
         vision_paid_order = ["qwen-vision-lowcost", "zhipu-vision-paid", "zhipu-vision-lowcost", "doubao-frontier-paid", "gemini-frontier-paid", "kimi-frontier-paid", "qwen-frontier-paid", "gemini-paid"]
         vision_paid = [choice for choice in choices if _is_vision_choice(choice)]
         rank = {name: index for index, name in enumerate(vision_paid_order)}
-        return sorted(vision_paid, key=lambda choice: (rank.get(choice.provider.name, 100), choice.provider.priority))
+        states = _load_route_state(settings)
+        evidence = _load_route_health(settings)
+        return sorted(
+            vision_paid,
+            key=lambda choice: (
+                _route_health_sort_rank(settings, choice, states, evidence),
+                -MULTIMODAL_QUALITY_BANDS.get(choice.model, 0),
+                rank.get(choice.provider.name, 100),
+                choice.provider.priority,
+            ),
+        )
     rank = {name: index for index, name in enumerate(PAID_FALLBACK_ORDER)}
     return sorted(
         choices,
@@ -3932,6 +3952,7 @@ def _build_multimodal_route(
     paid_allowed: bool,
 ) -> dict[str, Any]:
     states = _load_route_state(settings)
+    evidence = _load_route_health(settings)
     order = {model: index for index, model in enumerate(MULTIMODAL_UNDERSTANDING_ORDER)}
     choices = [
         choice
@@ -3946,6 +3967,7 @@ def _build_multimodal_route(
     ]
     choices.sort(
         key=lambda choice: (
+            _route_health_sort_rank(settings, choice, states, evidence),
             -MULTIMODAL_QUALITY_BANDS.get(choice.model, 0),
             0 if choice.provider.free else 1,
             float((_budget_status(choice, input_tokens, max_cost_usd).get("projected_cost_usd")) or 0.0),
@@ -3975,6 +3997,7 @@ def _build_multimodal_route(
         if not choice:
             return None
         result = describe_choice_capability(choice)
+        result.update(_route_health_snapshot(settings, choice, states, evidence))
         result["budget"] = _budget_status(choice, input_tokens, max_cost_usd)
         result["quality_band"] = MULTIMODAL_QUALITY_BANDS.get(choice.model, 0)
         result["audit_eligible"] = choice.model in MULTIMODAL_AUDIT_ORDER
