@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.1 - 2026-08-27
+
+- Fixed golden-evaluation cost accounting so a failed provider or baseline call
+  that reached a terminal settled state remains attributed to the final report,
+  including budget-warning outcomes, without double counting.
+- Stopped remaining candidate cases after a terminal call failure and retained
+  the existing hard-gate behavior that avoids unnecessary paid baseline or
+  blind-review work.
+- Upgraded the maintained GitHub Actions runtime and pinned every third-party
+  Action reference to a full commit SHA with a regression test, without
+  changing provider routes, role-quality bands, privacy policy, paid
+  authorization, or task descriptor defaults.
+
 ## 0.9.0 - 2026-08-11
 
 - Promoted the independently verified 0.9.0 release-candidate series to the

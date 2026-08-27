@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from smart_llm_router import __version__
 from smart_llm_router.cli import build_parser, main
 
 
@@ -44,7 +45,7 @@ class CliTests(unittest.TestCase):
                 text=True,
                 env=self._isolated_launcher_env(root),
             )
-            self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0")
+            self.assertEqual(result.stdout.strip(), f"smart-llm-router {__version__}")
 
     def test_package_launcher_ignores_same_named_package_in_caller_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -61,7 +62,7 @@ class CliTests(unittest.TestCase):
                 text=True,
                 env=self._isolated_launcher_env(root),
             )
-            self.assertEqual(result.stdout.strip(), "smart-llm-router 0.9.0")
+            self.assertEqual(result.stdout.strip(), f"smart-llm-router {__version__}")
 
     def test_package_launcher_preserves_caller_relative_paths(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
