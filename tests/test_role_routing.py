@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from smart_llm_router.config import LLMProvider, Settings
-from smart_llm_router.router import LLMChoice, _max_output_tokens_for_budget, _price_per_million, describe_choice_capability, recommend_route, route_plan, run_llm_task
+from smart_llm_router.router import LLMChoice, _max_output_tokens_for_budget, _price_per_million, _record_success, describe_choice_capability, recommend_route, route_plan, run_llm_task
 
 
 class RoleRoutingTests(unittest.TestCase):
@@ -614,6 +614,64 @@ class RoleRoutingTests(unittest.TestCase):
         self.assertEqual(describe_choice_capability(choice)["input_modalities"], ["text", "image"])
         self.assertEqual(_price_per_million(choice, "input"), 0.44)
         self.assertEqual(_price_per_million(choice, "output"), 1.32)
+
+    def test_recently_healthy_vision_route_beats_unknown_then_quality_breaks_health_tie(self) -> None:
+        qwen = LLMProvider(
+            "qwen-frontier-paid",
+            "https://qwen.test/v1",
+            "QWEN_KEY",
+            ("qwen3.7-plus",),
+            False,
+            1,
+            "paid",
+        )
+        deepseek = LLMProvider(
+            "deepseek-direct-paid",
+            "https://deepseek.test/v1",
+            "DEEPSEEK_KEY",
+            ("deepseek-v4-flash-vision-exp",),
+            False,
+            2,
+            "paid",
+        )
+        settings = self._settings((qwen, deepseek))
+        deepseek_choice = LLMChoice(deepseek, deepseek.models[0])
+        qwen_choice = LLMChoice(qwen, qwen.models[0])
+        _record_success(settings, deepseek_choice, {})
+        with patch.dict(os.environ, {"QWEN_KEY": "test", "DEEPSEEK_KEY": "test"}, clear=True):
+            recommendation = recommend_route(
+                settings,
+                task="vision",
+                prompt="describe a public synthetic image",
+                prefer_free=False,
+                paid_fallback=True,
+                quality_target="production",
+                max_cost_usd=0.005,
+            )
+            plan = route_plan(
+                settings,
+                task="vision",
+                prompt="describe a public synthetic image",
+                quality_target="production",
+                max_cost_usd=0.005,
+                paid_allowed=True,
+            )
+        self.assertEqual(recommendation["recommended_order"][0]["model"], deepseek.models[0])
+        self.assertEqual(plan["multimodal_route"]["selected"]["model"], deepseek.models[0])
+        self.assertEqual(plan["multimodal_route"]["selected"]["health_status"], "healthy")
+
+        _record_success(settings, qwen_choice, {})
+        with patch.dict(os.environ, {"QWEN_KEY": "test", "DEEPSEEK_KEY": "test"}, clear=True):
+            tied_health = route_plan(
+                settings,
+                task="vision",
+                prompt="describe a public synthetic image",
+                quality_target="production",
+                max_cost_usd=0.005,
+                paid_allowed=True,
+            )
+        self.assertEqual(tied_health["multimodal_route"]["selected"]["model"], qwen.models[0])
+        self.assertEqual(tied_health["multimodal_route"]["selected"]["quality_band"], 4)
 
 
 if __name__ == "__main__":

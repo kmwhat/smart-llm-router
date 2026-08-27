@@ -1,5 +1,22 @@
 # Public Release Readiness
 
+## 0.9.3 Stable Release — 2026-08-27
+
+Status: clean production-routing repair candidate only. Protected pull request,
+CI, exact merged-main verification, tag, publication, registry activation,
+normal unpinned production vision canary, and rollback proof remain separately
+gated; this repository document does not claim those later gates ran.
+
+- Automatic paid vision execution and route planning put recent real success
+  ahead of declared-but-unproven routes.
+- Among routes with equal health, the existing multimodal quality band remains
+  the next ordering key; health awareness does not lower the requested quality
+  floor or grant audit-band-4 status.
+- Multimodal route receipts expose bounded health status and evidence without
+  exposing provider credentials or private runtime payloads.
+- v0.9.2 remains the immediate rollback and v0.9.1 remains the secondary
+  rollback until post-activation observation passes.
+
 ## 0.9.2 Stable Release — 2026-08-27
 
 Status: clean patch-release candidate only. Protected pull request and CI,

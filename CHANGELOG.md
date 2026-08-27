@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.3 - 2026-08-27
+
+- Made automatic paid vision execution and route planning prefer a route with
+  fresh successful health evidence over declared but unproven alternatives.
+- Preserved quality ordering when routes have the same health status, so a
+  healthy higher-band route still outranks a healthy lower-band route.
+- Exposed current health evidence in multimodal route receipts without changing
+  audit-band registration, privacy controls, or paid budget requirements.
+
 ## 0.9.2 - 2026-08-27
 
 - Added the official exact-ID `deepseek-v4-flash-vision-exp` paid multimodal
