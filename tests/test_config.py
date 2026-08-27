@@ -107,6 +107,8 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings()
         names = {provider.name for provider in settings.providers}
         self.assertIn("deepseek-direct-paid", names)
+        deepseek = next(provider for provider in settings.providers if provider.name == "deepseek-direct-paid")
+        self.assertIn("deepseek-v4-flash-vision-exp", deepseek.models)
         self.assertIn("zhipu-vision-paid", names)
         self.assertIn("zhipu-asr-paid", names)
         self.assertIn("zhipu-image-paid", names)
