@@ -1,5 +1,32 @@
 # Public Release Readiness
 
+## 0.9.2 Stable Release — 2026-08-27
+
+Status: clean patch-release candidate only. Protected pull request and CI,
+exact merged-main verification, tag, publication, registry acceptance, runtime
+projection, public synthetic vision canary, and rollback proof remain separately
+gated; this repository document does not claim those later gates ran.
+
+- Package metadata, runtime version, README, changelog, CLI, and the canonical
+  GitHub wheel URL identify `0.9.2`.
+- DeepSeek's exact `deepseek-v4-flash-vision-exp` route uses the documented
+  OpenAI-compatible image payload and native thinking control.
+- Budget reservation uses the higher published peak cache-miss/input and output
+  rates; provider-reported image input tokens remain settlement authority.
+- The experimental vision model is limited to production band 3 and is not
+  registered as audit or plan-audit band 4.
+- External method scan selected DeepSeek's official
+  [release note](https://api-docs.deepseek.com/updates/),
+  [Vision guide](https://api-docs.deepseek.com/guides/vision), and
+  [current pricing](https://api-docs.deepseek.com/quick_start/pricing/) as the
+  authoritative identity, request-shape, and cost sources. It rejected treating
+  text-only DeepSeek models, model-directory visibility, or a generic successful
+  request as proof of vision capability. Validation requires an exact served
+  model, two public synthetic images, uncached terminal outputs, ledgered cost,
+  and a retained v0.9.1 rollback.
+- Public source and release artifacts must contain no credential values, private
+  environment files, credential catalogs, runtime ledgers, caches, or backups.
+
 ## 0.9.1 Stable Release — 2026-08-27
 
 Status: clean patch-release candidate only. Protected pull request and CI,

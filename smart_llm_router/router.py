@@ -352,6 +352,7 @@ ROLE_MODEL_ALIASES: dict[str, str] = {
 }
 
 MULTIMODAL_UNDERSTANDING_ORDER = (
+    "deepseek-v4-flash-vision-exp",
     "doubao-seed-2-0-pro-260215",
     "qwen3.7-plus",
     "kimi-k3",
@@ -377,6 +378,7 @@ MULTIMODAL_QUALITY_BANDS = {
     "gemini-3.1-pro-preview": 4,
     "doubao-seed-2-1-pro": 3,
     "doubao-seed-2-1-turbo": 3,
+    "deepseek-v4-flash-vision-exp": 3,
 }
 
 # Conservative public list prices in USD per million tokens. For prices
@@ -384,6 +386,10 @@ MULTIMODAL_QUALITY_BANDS = {
 MODEL_PRICE_CATALOG: dict[str, dict[str, float | str]] = {
     "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "currency": "USD"},
     "deepseek-v4-pro": {"input": 0.435, "output": 0.87, "currency": "USD"},
+    # DeepSeek publishes peak and off-peak prices for Vision Exp. Reserve the
+    # higher peak cache-miss/input and output rates so budgets never depend on
+    # call time; image tokens are included in provider-reported input usage.
+    "deepseek-v4-flash-vision-exp": {"input": 0.44, "output": 1.32, "currency": "USD"},
     "qwen3.7-max": {"input": 12.0, "output": 36.0, "currency": "CNY"},
     "qwen3.7-plus": {"input": 2.0, "output": 8.0, "currency": "CNY"},
     "glm-5.2": {"input": 8.0, "output": 28.0, "currency": "CNY"},
@@ -424,6 +430,7 @@ PROVIDER_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
 MODEL_INPUT_TOKEN_GUARD_FACTORS: dict[str, float] = {
     "deepseek-v4-flash": 1.15,
     "deepseek-v4-pro": 1.15,
+    "deepseek-v4-flash-vision-exp": 1.15,
 }
 # Provider tokenizers may add a fixed chat-template/system envelope that is
 # disproportionate for tiny prompts. The first bounded MiniMax-M3 canary
@@ -451,10 +458,13 @@ PROVIDER_FAMILY_CATALOG: dict[str, dict[str, Any]] = {
     },
     "deepseek": {
         "env_keys": ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY"],
-        "input_modalities": ["text"],
+        "input_modalities": ["text", "image"],
         "output_modalities": ["text"],
-        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "transcript_correct", "clean", "summarize", "qa", "draft", "audit", "verify", "quality_enhance", "code"],
-        "notes": "Preferred low-cost paid family for transcript correction and structured synthesis when configured directly or through OpenRouter.",
+        "task_types": ["plan", "research_enhance", "plan_audit", "execute", "transcript_correct", "clean", "summarize", "qa", "draft", "vision", "ocr", "audit", "verify", "quality_enhance", "code"],
+        "model_modes": {
+            "multimodal_reasoning": ["deepseek-v4-flash-vision-exp"],
+        },
+        "notes": "Low-cost paid text family plus the exact experimental Vision Exp multimodal route. Vision Exp is production band 3 only and is not an audit-band-4 route.",
     },
     "qwen": {
         "env_keys": ["DASHSCOPE_API_KEY"],
@@ -1234,7 +1244,7 @@ def _role_model_aliases(choice: LLMChoice) -> tuple[str, ...]:
 
 def _is_deepseek_v4_choice(choice: LLMChoice) -> bool:
     return _model_family(choice) == "deepseek" and any(
-        alias in {"deepseek-v4-flash", "deepseek-v4-pro"}
+        alias in {"deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"}
         for alias in _role_model_aliases(choice)
     )
 
@@ -1278,6 +1288,7 @@ def _is_general_multimodal_choice(choice: LLMChoice) -> bool:
             "doubao-seed-2-0",
             "gemini-2.5-pro",
             "gemini-3.1-pro",
+            "deepseek-v4-flash-vision-exp",
         )
     )
 
@@ -3965,6 +3976,8 @@ def _build_multimodal_route(
             return None
         result = describe_choice_capability(choice)
         result["budget"] = _budget_status(choice, input_tokens, max_cost_usd)
+        result["quality_band"] = MULTIMODAL_QUALITY_BANDS.get(choice.model, 0)
+        result["audit_eligible"] = choice.model in MULTIMODAL_AUDIT_ORDER
         return result
 
     return {

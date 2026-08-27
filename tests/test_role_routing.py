@@ -586,6 +586,35 @@ class RoleRoutingTests(unittest.TestCase):
         self.assertEqual(route["review_with"]["model"], "doubao-seed-2-0-pro-260215")
         self.assertIn("doubao-seedance-2.0", route["cataloged_not_executable"]["video_generation"])
 
+    def test_deepseek_vision_exp_is_budgeted_production_fallback_not_audit_band_four(self) -> None:
+        provider = LLMProvider(
+            "deepseek-direct-paid",
+            "https://deepseek.test/v1",
+            "DEEPSEEK_KEY",
+            ("deepseek-v4-flash-vision-exp",),
+            False,
+            1,
+            "paid",
+        )
+        choice = LLMChoice(provider, provider.models[0])
+        with patch.dict(os.environ, {"DEEPSEEK_KEY": "test"}, clear=True):
+            plan = route_plan(
+                self._settings((provider,)),
+                task="vision",
+                prompt="describe a public synthetic image",
+                quality_target="production",
+                max_cost_usd=0.005,
+                paid_allowed=True,
+            )
+        route = plan["multimodal_route"]
+        self.assertEqual(route["selected"]["model"], "deepseek-v4-flash-vision-exp")
+        self.assertEqual(route["selected"]["quality_band"], 3)
+        self.assertFalse(route["selected"]["audit_eligible"])
+        self.assertIsNone(route["review_with"])
+        self.assertEqual(describe_choice_capability(choice)["input_modalities"], ["text", "image"])
+        self.assertEqual(_price_per_million(choice, "input"), 0.44)
+        self.assertEqual(_price_per_million(choice, "output"), 1.32)
+
 
 if __name__ == "__main__":
     unittest.main()

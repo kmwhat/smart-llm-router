@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.2 - 2026-08-27
+
+- Added the official exact-ID `deepseek-v4-flash-vision-exp` paid multimodal
+  route with OpenAI-compatible inline-image transport and DeepSeek native
+  thinking controls.
+- Applied conservative peak cache-miss/input and output prices to pre-send
+  budget checks, including provider-reported image input tokens.
+- Registered Vision Exp only as a production-quality band-3 fallback; its
+  experimental status does not grant audit or plan-audit band 4.
+
 ## 0.9.1 - 2026-08-27
 
 - Fixed golden-evaluation cost accounting so a failed provider or baseline call

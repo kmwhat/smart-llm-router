@@ -379,6 +379,48 @@ class BudgetEnforcementTests(unittest.TestCase):
         self.assertNotIn("enable_thinking", payload)
         self.assertNotIn("thinking_budget", payload)
 
+    def test_deepseek_vision_exp_preserves_image_and_disabled_thinking_controls(self) -> None:
+        provider = LLMProvider(
+            "deepseek-direct-paid",
+            "https://deepseek.test/v1",
+            "DEEPSEEK_KEY",
+            ("deepseek-v4-flash-vision-exp",),
+            False,
+            1,
+            "paid",
+        )
+        image_url = "data:image/png;base64,iVBORw0KGgo="
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ]
+        response = Mock()
+        response.json.return_value = {
+            "choices": [{"message": {"content": "white square"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 3},
+        }
+        with patch.dict(os.environ, {"DEEPSEEK_KEY": "test"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client:
+                client.return_value.__enter__.return_value.post.return_value = response
+                _call_openai_compatible(
+                    LLMChoice(provider, provider.models[0]),
+                    messages=messages,
+                    timeout=2,
+                    temperature=0,
+                    max_tokens=64,
+                    thinking={"type": "disabled"},
+                )
+        payload = client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "deepseek-v4-flash-vision-exp")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["messages"], messages)
+        self.assertNotIn("chat_template_kwargs", payload)
+
     def test_nvidia_deepseek_v4_uses_official_chat_template_kwargs(self) -> None:
         provider = LLMProvider(
             "nvidia-free",
