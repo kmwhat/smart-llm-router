@@ -2111,6 +2111,7 @@ def describe_task_v2(
     context: str | None = None,
     *,
     input_modalities: list[str] | None = None,
+    structured_output_required: bool = False,
 ) -> dict[str, Any]:
     """Return an explainable shadow classification without affecting routing."""
     task = normalize_task_type(task)
@@ -2174,8 +2175,9 @@ def describe_task_v2(
         latest,
         flags=re.IGNORECASE,
     ))
+    structured_output = structured_output or structured_output_required
     if meta_literal_task:
-        structured_output = False
+        structured_output = structured_output_required
     strong_reasoning = task in {"audit", "verify"} or bool(re.search(
         r"(?:深度分析|深入研究|研究报告|根因分析|严谨推导|证明|安全审计|威胁模型|"
         r"deep analysis|research report|root cause|rigorous proof|security audit|threat model)",
@@ -2334,7 +2336,13 @@ def _apply_task_descriptor_v2_activation(
     return complexity
 
 
-def score_task_complexity(task: str, prompt: str, context: str | None = None) -> dict[str, Any]:
+def score_task_complexity(
+    task: str,
+    prompt: str,
+    context: str | None = None,
+    *,
+    structured_output_required: bool = False,
+) -> dict[str, Any]:
     task = normalize_task_type(task)
     text = (prompt + "\n" + (context or "")).strip()
     token_estimate = _estimate_tokens(text) if text else 0
@@ -2377,7 +2385,12 @@ def score_task_complexity(task: str, prompt: str, context: str | None = None) ->
     return _apply_task_descriptor_v2_activation(
         task,
         complexity,
-        describe_task_v2(task, prompt, context),
+        describe_task_v2(
+            task,
+            prompt,
+            context,
+            structured_output_required=structured_output_required,
+        ),
     )
 
 
@@ -2451,6 +2464,7 @@ def _cache_key(
     thinking_mode: str = "auto",
     thinking_budget_tokens: int | None = None,
     final_answer_reserve_tokens: int | None = None,
+    structured_output_schema_fingerprint: str = "",
     complexity_label: str = "",
     complexity_source: str = "legacy",
     complexity_version: str = "",
@@ -2479,6 +2493,7 @@ def _cache_key(
         "thinking_mode": thinking_mode,
         "thinking_budget_tokens": thinking_budget_tokens,
         "final_answer_reserve_tokens": final_answer_reserve_tokens,
+        "structured_output_schema_fingerprint": structured_output_schema_fingerprint,
         "complexity_label": complexity_label,
         "complexity_source": complexity_source,
         "complexity_version": complexity_version,
@@ -2700,6 +2715,7 @@ def _required_structured_output_spec(
     *,
     task: str | None = None,
     context: str | None = None,
+    explicit_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     features = complexity.get("shadow_descriptor_v2", {}).get("features", {})
     combined = "\n".join(part for part in (prompt, context or "") if part)
@@ -2713,12 +2729,20 @@ def _required_structured_output_spec(
             or re.search(r"(?:\u53ea|\u4ec5|\u4e25\u683c|\u539f\u59cb).{0,12}json", lowered)
         )
     )
-    schema_driven = bool(
+    schema_driven = explicit_schema is not None or bool(
         re.search(r"json\s*schema", lowered)
         or re.search(r'"(?:\$schema|required|properties)"\s*:', combined)
     )
-    schema: dict[str, Any] | None = None
-    if schema_driven:
+    schema: dict[str, Any] | None = explicit_schema
+    parsed_schema: dict[str, Any] | None = None
+    prompt_schema_driven = bool(
+        re.search(r"json\s*schema", lowered)
+        or (
+            explicit_schema is None
+            and re.search(r'"(?:\$schema|required|properties)"\s*:', combined)
+        )
+    )
+    if prompt_schema_driven:
         decoder = json.JSONDecoder(
             parse_constant=_reject_nonfinite_json_constant,
             object_pairs_hook=_reject_duplicate_json_pairs,
@@ -2733,8 +2757,14 @@ def _required_structured_output_spec(
             if isinstance(candidate, dict) and any(
                 key in candidate for key in ("$schema", "type", "properties", "required")
             ):
-                schema = candidate
+                parsed_schema = candidate
                 break
+    if prompt_schema_driven and parsed_schema is None:
+        raise ValueError("governed_json_schema_missing_or_invalid:blocked_before_send")
+    if explicit_schema is not None and parsed_schema is not None and explicit_schema != parsed_schema:
+        raise ValueError("governed_json_schema_conflict:blocked_before_send")
+    if schema is None:
+        schema = parsed_schema
     if schema_driven and schema is None:
         raise ValueError("governed_json_schema_missing_or_invalid:blocked_before_send")
     if schema is not None:
@@ -2947,6 +2977,36 @@ def _structured_response_format(spec: dict[str, Any]) -> dict[str, Any] | None:
             },
         }
     return {"type": "json_object"}
+
+
+def _provider_native_response_format_supported(
+    choice: LLMChoice,
+    response_format: dict[str, Any] | None,
+) -> bool:
+    if response_format is None:
+        return True
+    provider_family = _provider_family(choice.provider)
+    if provider_family == "openrouter":
+        return True
+    if response_format.get("type") != "json_schema":
+        return True
+    model = choice.model.lower()
+    return provider_family == "qwen" and bool(
+        re.match(r"^qwen3\.(?:7-(?:plus|flash|max)|8-max)(?:$|-)", model)
+    )
+
+
+def _require_provider_native_response_format(
+    choice: LLMChoice,
+    response_format: dict[str, Any] | None,
+) -> None:
+    if response_format is None:
+        return
+    if not _provider_native_response_format_supported(choice, response_format):
+        raise RuntimeError(
+            "provider_native_structured_output_unsupported:"
+            f"{choice.provider.name}/{choice.model}:blocked_before_send"
+        )
 
 
 def _schema_required_field_count(schema: Any) -> int:
@@ -3810,11 +3870,17 @@ def infer_task_descriptor(
     risk: str | None = None,
     paid_allowed: bool = True,
     privacy: str = "auto",
+    structured_output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     task = normalize_task_type(task)
     if quality_target not in QUALITY_TARGETS:
         raise ValueError(f"不支持的质量档位：{quality_target}")
-    complexity = score_task_complexity(task, prompt, context)
+    complexity = score_task_complexity(
+        task,
+        prompt,
+        context,
+        structured_output_required=structured_output_schema is not None,
+    )
     inferred_input = input_modalities[:] if input_modalities else ["text"]
     inferred_output = output_modalities[:] if output_modalities else ["text"]
     if task in VISION_TASKS and "image" not in inferred_input:
@@ -3836,6 +3902,7 @@ def infer_task_descriptor(
             prompt,
             context,
             input_modalities=inferred_input,
+            structured_output_required=structured_output_schema is not None,
         ),
     )
     if not risk:
@@ -4627,12 +4694,13 @@ def _call_openai_compatible(
     openrouter_require_zdr: bool = False,
     openrouter_deny_data_collection: bool = False,
 ) -> tuple[str, dict[str, Any]]:
+    provider_family = _provider_family(choice.provider)
+    _require_provider_native_response_format(choice, response_format)
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
         raise RuntimeError(f"缺少 API key 环境变量：{choice.provider.api_key_env}")
     effective_temperature = 1 if _model_family(choice) == "kimi" else temperature
     payload: dict[str, Any] = {"model": choice.model, "messages": messages, "temperature": effective_temperature}
-    provider_family = _provider_family(choice.provider)
     if max_tokens:
         if provider_family == "minimax" or (
             provider_family == "qwen" and choice.model.lower() in MODEL_BILLABLE_OUTPUT_RESERVE_OVERHEAD
@@ -4676,7 +4744,11 @@ def _call_openai_compatible(
     )
     if openrouter_controls_requested and not is_openrouter:
         raise RuntimeError("OpenRouter 上游 provider/ZDR 控制只能用于 OpenRouter 路线。")
-    if response_format is not None and is_openrouter:
+    native_response_format_applied = bool(
+        response_format is not None
+        and (is_openrouter or response_format.get("type") == "json_schema")
+    )
+    if native_response_format_applied:
         payload["response_format"] = response_format
     provider_preferences: dict[str, Any] = {}
     if upstream_providers:
@@ -4769,7 +4841,8 @@ def _call_openai_compatible(
         "provider_fallbacks_allowed": openrouter_allow_fallbacks,
         "zdr_required": openrouter_require_zdr,
         "data_collection_denied": openrouter_deny_data_collection,
-        "structured_response_requested": response_format is not None and is_openrouter,
+        "structured_response_requested": native_response_format_applied,
+        "provider_native_structured_output": native_response_format_applied,
         "served_provider": served_provider,
         "served_model": served_model,
         "generation_id": generation_id,
@@ -5582,6 +5655,7 @@ def run_llm_task(
     thinking_mode: str = "auto",
     thinking_budget_tokens: int | None = None,
     final_answer_reserve_tokens: int | None = None,
+    structured_output_schema: dict[str, Any] | None = None,
     workflow_id: str | None = None,
     workflow_max_cost_usd: float | None = None,
     workflow_stage: str | None = None,
@@ -5699,7 +5773,33 @@ def run_llm_task(
             return LLMResult(provider="local-preprocess", model="local_rules", content=json.dumps(preprocessing, ensure_ascii=False, indent=2), cached=False, complexity=complexity["label"], ledger_id=ledger_id)
         if preprocessing.get("compressed_context"):
             context = str(preprocessing["compressed_context"])
-    complexity = score_task_complexity(task, prompt, context)
+    complexity = score_task_complexity(
+        task,
+        prompt,
+        context,
+        structured_output_required=structured_output_schema is not None,
+    )
+    required_output_spec = _required_structured_output_spec(
+        complexity,
+        prompt,
+        task=task,
+        context=context,
+        explicit_schema=structured_output_schema,
+    )
+    required_output_format = required_output_spec["format"]
+    response_format = _structured_response_format(required_output_spec)
+    structured_output_schema_fingerprint = (
+        sha256(
+            json.dumps(
+                required_output_spec["schema"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if required_output_spec["schema"] is not None
+        else ""
+    )
     if complexity["label"] == "simple" and prefer_free and task not in VISION_TASKS and task not in ROLE_TASKS and task != "transcript_correct":
         paid_fallback = False
     image_fingerprint = _image_hash(image_path)
@@ -5722,6 +5822,7 @@ def run_llm_task(
         thinking_mode=thinking_mode,
         thinking_budget_tokens=thinking_budget_tokens,
         final_answer_reserve_tokens=final_answer_reserve_tokens,
+        structured_output_schema_fingerprint=structured_output_schema_fingerprint,
         complexity_label=complexity["label"],
         complexity_source=complexity["complexity_source"],
         complexity_version=complexity["shadow_descriptor_v2"]["classification_version"],
@@ -5747,6 +5848,7 @@ def run_llm_task(
         "thinking_mode": thinking_mode,
         "thinking_budget_tokens": thinking_budget_tokens,
         "final_answer_reserve_tokens": final_answer_reserve_tokens,
+        "structured_output_schema_fingerprint": structured_output_schema_fingerprint,
         "no_think_marker": no_think_marker,
         "workflow_id": workflow_id,
         "workflow_max_cost_usd": workflow_max_cost_usd,
@@ -5769,9 +5871,6 @@ def run_llm_task(
         "cache_hit": False,
         "response_cache_persisted": False,
     }
-    required_output_spec = _required_structured_output_spec(complexity, prompt, task=task, context=context)
-    required_output_format = required_output_spec["format"]
-    response_format = _structured_response_format(required_output_spec)
     if effective_cache_enabled:
         cache = _load_response_cache(settings)
         cached = cache.get(cache_key)
@@ -5971,6 +6070,19 @@ def run_llm_task(
         if not filtered:
             raise RuntimeError(f"没有匹配 provider/model 过滤条件的可用模型：provider={provider or '-'} model={model or '-'}")
         choices = filtered
+    if response_format is not None and response_format.get("type") == "json_schema":
+        schema_capable_choices = [
+            choice
+            for choice in choices
+            if _provider_native_response_format_supported(choice, response_format)
+        ]
+        if not schema_capable_choices:
+            requested_route = f"provider={provider or '-'} model={model or '-'}"
+            raise RuntimeError(
+                "provider_native_structured_output_unsupported:"
+                f"{requested_route}:blocked_before_send"
+            )
+        choices = schema_capable_choices
     if openrouter_controls_requested:
         choices = [choice for choice in choices if _provider_family(choice.provider) == "openrouter"]
         if not choices:
@@ -5992,13 +6104,23 @@ def run_llm_task(
             input_token_guard_factor=input_token_guard_factor,
         )
         requested_output_limit = max_output_tokens or budget_output_limit or 4096
+        effective_final_answer_reserve_tokens = final_answer_reserve_tokens
+        if (
+            required_output_spec["schema_driven"]
+            and effective_final_answer_reserve_tokens is None
+            and requested_output_limit >= 2
+        ):
+            effective_final_answer_reserve_tokens = min(
+                requested_output_limit - 1,
+                max(128, requested_output_limit // 3),
+            )
         thinking_plan = _thinking_plan(
             choice,
             task=task,
             total_output_tokens=requested_output_limit,
             thinking_mode=thinking_mode,
             thinking_budget_tokens=thinking_budget_tokens,
-            final_answer_reserve_tokens=final_answer_reserve_tokens,
+            final_answer_reserve_tokens=effective_final_answer_reserve_tokens,
         )
         # The total reservation is the governed sum of reasoning and final
         # answer allowances when the endpoint exposes separate controls.

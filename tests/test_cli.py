@@ -159,6 +159,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.thinking_budget_tokens, 800)
         self.assertEqual(args.final_answer_reserve_tokens, 400)
 
+    def test_task_parses_explicit_json_schema_file(self) -> None:
+        args = build_parser().parse_args([
+            "task", "audit public synthetic evidence", "--task", "audit",
+            "--json-schema-file", "contract.json",
+        ])
+        self.assertEqual(args.json_schema_file, "contract.json")
+
     def test_route_stats_command_parses_task_and_window(self) -> None:
         args = build_parser().parse_args(["route-stats", "--task", "audit", "--limit", "250"])
         self.assertEqual(args.command, "route-stats")

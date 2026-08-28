@@ -275,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     task.add_argument("--task", choices=TASK_CHOICES, default="draft")
     task.add_argument("--context")
     task.add_argument("--context-file", help="从文件读取参考材料")
+    task.add_argument("--json-schema-file", help="读取显式 JSON Schema；仅受支持的 provider-native 路线可执行")
     task.add_argument("--image", help="本地图片路径；用于 vision 或支持图片的多模态任务")
     task.add_argument("--retrieve-dir", help="先从本地 txt/md 资料目录检索相关片段并注入 context")
     task.add_argument("--retrieve-limit", type=int, default=5)
@@ -553,6 +554,16 @@ def main() -> None:
         print(json.dumps(quick_vision_benchmark(settings, args.image, timeout=args.timeout, limit=args.limit, include_unprotected_trial=args.include_unprotected_trial), ensure_ascii=False, indent=2))
     elif args.command == "task":
         context = args.context
+        structured_output_schema = None
+        if args.json_schema_file:
+            try:
+                structured_output_schema = json.loads(
+                    Path(args.json_schema_file).read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                parser.error(f"无法读取有效的 --json-schema-file：{exc}")
+            if not isinstance(structured_output_schema, dict):
+                parser.error("--json-schema-file 根节点必须是 JSON object")
         if args.context_file:
             with open(args.context_file, encoding="utf-8") as handle:
                 context = handle.read()
@@ -582,6 +593,7 @@ def main() -> None:
             thinking_mode="disabled" if args.no_think else args.thinking_mode,
             thinking_budget_tokens=args.thinking_budget_tokens,
             final_answer_reserve_tokens=args.final_answer_reserve_tokens,
+            structured_output_schema=structured_output_schema,
             workflow_id=args.workflow_id,
             workflow_max_cost_usd=args.workflow_max_cost_usd,
             workflow_stage=args.workflow_stage,
