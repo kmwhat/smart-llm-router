@@ -1,5 +1,20 @@
 # Public Release Readiness
 
+## 0.9.4 Stable Release — 2026-08-28
+
+Status: clean release-freeze candidate only. Protected pull request, CI, tag,
+publication, registry activation, and global runtime projection remain separate;
+this document does not claim those later actions ran.
+
+- Explicit caller schemas survive classification and cache identity and reach
+  supported provider-native structured-output transports.
+- Direct Qwen strict JSON Schema transport is limited to supported model series
+  on official Alibaba Model Studio endpoints; unsupported routes fail closed
+  before credential lookup or network send.
+- Provider routes, role-quality bands, privacy policy, paid authorization, and
+  task descriptor defaults are unchanged from `0.9.3`.
+- v0.9.3 remains the immediate rollback until post-activation observation passes.
+
 ## 0.9.3 Stable Release — 2026-08-27
 
 Status: clean production-routing repair candidate only. Protected pull request,

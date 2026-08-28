@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.4 - 2026-08-28
+
+- Preserved caller-supplied JSON Schema requirements through task
+  classification, cache identity, route selection, and provider requests.
+- Added provider-native strict JSON Schema transport for supported official
+  Alibaba Model Studio Qwen endpoints while retaining OpenRouter support.
+- Failed closed before credential lookup or HTTP send when a selected route
+  cannot apply the required native structured-output control.
+
 ## 0.9.3 - 2026-08-27
 
 - Made automatic paid vision execution and route planning prefer a route with
