@@ -623,6 +623,44 @@ class RequestPolicyIncompatibility(RuntimeError):
         self.reason = reason
 
 
+class ProviderRequestRejected(RuntimeError):
+    """A provider rejected governed request controls before model execution."""
+
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        reason: str,
+        error_code: str | None = None,
+        error_type: str | None = None,
+        error_param: str | None = None,
+        provider_schema_projected: bool = False,
+        provider_schema_fingerprint: str | None = None,
+    ) -> None:
+        details = [reason, f"HTTP {status_code}"]
+        if error_code:
+            details.append(f"code={error_code}")
+        super().__init__(f"provider request rejected ({', '.join(details)})")
+        self.status_code = status_code
+        self.reason = reason
+        self.error_code = error_code
+        self.error_type = error_type
+        self.error_param = error_param
+        self.provider_schema_projected = provider_schema_projected
+        self.provider_schema_fingerprint = provider_schema_fingerprint
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "status_code": self.status_code,
+            "reason": self.reason,
+            "error_code": self.error_code,
+            "error_type": self.error_type,
+            "error_param": self.error_param,
+            "provider_schema_projected": self.provider_schema_projected,
+            "provider_schema_fingerprint": self.provider_schema_fingerprint,
+        }
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -3014,6 +3052,155 @@ def _require_provider_native_response_format(
         )
 
 
+QWEN_PROVIDER_SCHEMA_PROJECTION_VERSION = "qwen-json-schema-v1"
+QWEN_PROVIDER_SCHEMA_PASSTHROUGH_KEYWORDS = (
+    "type",
+    "enum",
+    "description",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+)
+QWEN_PROVIDER_SCHEMA_UNPROJECTABLE_KEYWORDS = frozenset(
+    {"allOf", "anyOf", "oneOf", "not"}
+)
+
+
+def _canonical_json_fingerprint(value: Any) -> str:
+    return sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _qwen_provider_schema_projection(schema: dict[str, Any], *, path: str = "$") -> dict[str, Any]:
+    """Project the local schema to the subset documented by official Qwen JSON Schema docs.
+
+    The original schema remains authoritative for local validation. Unsupported
+    combinators fail closed because silently dropping them could remove the only
+    provider-facing description of a value's shape.
+    """
+    unprojectable = sorted(set(schema).intersection(QWEN_PROVIDER_SCHEMA_UNPROJECTABLE_KEYWORDS))
+    if unprojectable:
+        raise RuntimeError(
+            "qwen_provider_schema_projection_unsupported:"
+            f"{path}:{unprojectable[0]}:blocked_before_send"
+        )
+    projected: dict[str, Any] = {}
+    for keyword in QWEN_PROVIDER_SCHEMA_PASSTHROUGH_KEYWORDS:
+        if keyword not in schema:
+            continue
+        value = schema[keyword]
+        if keyword == "properties":
+            projected[keyword] = {
+                field: _qwen_provider_schema_projection(child, path=f"{path}.properties.{field}")
+                for field, child in value.items()
+            }
+        elif keyword == "items":
+            projected[keyword] = _qwen_provider_schema_projection(value, path=f"{path}.items")
+        else:
+            projected[keyword] = value
+    if "const" in schema:
+        projected["enum"] = [schema["const"]]
+    if not projected:
+        raise RuntimeError(f"qwen_provider_schema_projection_empty:{path}:blocked_before_send")
+    return projected
+
+
+def _provider_response_format(
+    choice: LLMChoice,
+    response_format: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, bool, str | None]:
+    if response_format is None or response_format.get("type") != "json_schema":
+        return response_format, False, None
+    schema_wrapper = response_format.get("json_schema")
+    schema = schema_wrapper.get("schema") if isinstance(schema_wrapper, dict) else None
+    if not isinstance(schema, dict):
+        raise RuntimeError("provider_native_json_schema_missing:blocked_before_send")
+    provider_family = _provider_family(choice.provider)
+    hostname = (urlparse(choice.provider.base_url).hostname or "").lower()
+    official_qwen_endpoint = (
+        hostname in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
+        or hostname.endswith(".maas.aliyuncs.com")
+    )
+    if provider_family != "qwen" or not official_qwen_endpoint:
+        return response_format, False, _canonical_json_fingerprint(schema)
+    provider_schema = _qwen_provider_schema_projection(schema)
+    projected_wrapper = dict(schema_wrapper)
+    projected_wrapper["schema"] = provider_schema
+    projected_response_format = dict(response_format)
+    projected_response_format["json_schema"] = projected_wrapper
+    return (
+        projected_response_format,
+        provider_schema != schema,
+        _canonical_json_fingerprint(provider_schema),
+    )
+
+
+def _safe_provider_error_identifier(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", normalized):
+        return None
+    return normalized
+
+
+def _provider_request_rejection(
+    response: httpx.Response,
+    *,
+    provider_schema_projected: bool,
+    provider_schema_fingerprint: str | None,
+) -> ProviderRequestRejected | None:
+    payload: Any = None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    payload_object = payload if isinstance(payload, dict) else {}
+    error = payload_object.get("error")
+    error = error if isinstance(error, dict) else {}
+    error_code = _safe_provider_error_identifier(error.get("code") or payload_object.get("code"))
+    error_type = _safe_provider_error_identifier(error.get("type") or payload_object.get("type"))
+    error_param = _safe_provider_error_identifier(error.get("param") or payload_object.get("param"))
+    message = error.get("message") if isinstance(error.get("message"), str) else ""
+    normalized_message = " ".join(message.lower().split())[:1024]
+    schema_signal = any(
+        marker in normalized_message
+        for marker in ("json schema", "json_schema", "response_format", "schema")
+    ) or any(
+        marker in (error_code or "").lower()
+        for marker in ("schema", "responseformat", "response_format")
+    ) or (error_param or "").lower() == "response_format"
+    thinking_signal = any(
+        marker in normalized_message
+        for marker in ("enable_thinking", "thinking_budget", "thinking mode")
+    ) or any(
+        marker in (error_code or "").lower()
+        for marker in ("enablethinking", "enable_thinking", "thinkingbudget", "thinking_budget")
+    ) or (error_param or "").lower() in {"enable_thinking", "thinking_budget"}
+    if not schema_signal and not thinking_signal:
+        return None
+    return ProviderRequestRejected(
+        int(response.status_code),
+        reason=(
+            "structured_output_constraint"
+            if schema_signal
+            else "thinking_control_constraint"
+        ),
+        error_code=error_code,
+        error_type=error_type,
+        error_param=error_param,
+        provider_schema_projected=provider_schema_projected,
+        provider_schema_fingerprint=provider_schema_fingerprint,
+    )
+
+
 def _schema_required_field_count(schema: Any) -> int:
     if not isinstance(schema, dict):
         return 0
@@ -3048,6 +3235,9 @@ def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
             "zdr_required": False,
             "data_collection_denied": False,
             "structured_response_requested": False,
+            "provider_schema_projection_version": None,
+            "provider_schema_projected": False,
+            "provider_schema_fingerprint": None,
             "served_provider": None,
             "served_model": None,
             "generation_id": None,
@@ -3062,6 +3252,18 @@ def _sanitized_routing_metadata(usage: dict[str, Any]) -> dict[str, Any]:
         "zdr_required": bool(metadata.get("zdr_required")),
         "data_collection_denied": bool(metadata.get("data_collection_denied")),
         "structured_response_requested": bool(metadata.get("structured_response_requested")),
+        "provider_schema_projection_version": (
+            metadata.get("provider_schema_projection_version")
+            if isinstance(metadata.get("provider_schema_projection_version"), str)
+            else None
+        ),
+        "provider_schema_projected": bool(metadata.get("provider_schema_projected")),
+        "provider_schema_fingerprint": (
+            metadata.get("provider_schema_fingerprint")
+            if isinstance(metadata.get("provider_schema_fingerprint"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", metadata["provider_schema_fingerprint"])
+            else None
+        ),
         "served_provider": metadata.get("served_provider") if isinstance(metadata.get("served_provider"), str) else None,
         "served_model": metadata.get("served_model") if isinstance(metadata.get("served_model"), str) else None,
         "generation_id": metadata.get("generation_id") if isinstance(metadata.get("generation_id"), str) else None,
@@ -4701,6 +4903,9 @@ def _call_openai_compatible(
 ) -> tuple[str, dict[str, Any]]:
     provider_family = _provider_family(choice.provider)
     _require_provider_native_response_format(choice, response_format)
+    provider_response_format, provider_schema_projected, provider_schema_fingerprint = (
+        _provider_response_format(choice, response_format)
+    )
     key = os.getenv(choice.provider.api_key_env, "").strip()
     if not key:
         raise RuntimeError(f"缺少 API key 环境变量：{choice.provider.api_key_env}")
@@ -4750,11 +4955,11 @@ def _call_openai_compatible(
     if openrouter_controls_requested and not is_openrouter:
         raise RuntimeError("OpenRouter 上游 provider/ZDR 控制只能用于 OpenRouter 路线。")
     native_response_format_applied = bool(
-        response_format is not None
-        and (is_openrouter or response_format.get("type") == "json_schema")
+        provider_response_format is not None
+        and (is_openrouter or provider_response_format.get("type") == "json_schema")
     )
     if native_response_format_applied:
-        payload["response_format"] = response_format
+        payload["response_format"] = provider_response_format
     provider_preferences: dict[str, Any] = {}
     if upstream_providers:
         provider_preferences["only"] = list(upstream_providers)
@@ -4784,13 +4989,25 @@ def _call_openai_compatible(
                 allow_fallbacks=openrouter_allow_fallbacks,
                 require_zdr=openrouter_require_zdr,
                 deny_data_collection=openrouter_deny_data_collection,
-                response_format=response_format,
+                response_format=provider_response_format,
             )
             if policy_reason:
                 raise RequestPolicyIncompatibility(
                     int(exc.response.status_code),
                     policy_reason,
                 ) from None
+            if (
+                provider_family == "qwen"
+                and provider_response_format is not None
+                and int(exc.response.status_code) in {400, 422}
+            ):
+                provider_rejection = _provider_request_rejection(
+                    exc.response,
+                    provider_schema_projected=provider_schema_projected,
+                    provider_schema_fingerprint=provider_schema_fingerprint,
+                )
+                if provider_rejection is not None:
+                    raise provider_rejection from None
             raise
         data = response.json()
     if provider_family == "minimax":
@@ -4848,6 +5065,11 @@ def _call_openai_compatible(
         "data_collection_denied": openrouter_deny_data_collection,
         "structured_response_requested": native_response_format_applied,
         "provider_native_structured_output": native_response_format_applied,
+        "provider_schema_projection_version": (
+            QWEN_PROVIDER_SCHEMA_PROJECTION_VERSION if provider_schema_projected else None
+        ),
+        "provider_schema_projected": provider_schema_projected,
+        "provider_schema_fingerprint": provider_schema_fingerprint,
         "served_provider": served_provider,
         "served_model": served_model,
         "generation_id": generation_id,
@@ -6612,13 +6834,20 @@ def run_llm_task(
                     f"{choice.provider.name}/{choice.model}: governed structured output invalid ({failure_output_error})"
                 ) from None
             errors.append(f"{choice.provider.name}/{choice.model}: {exc}")
-            health_cooldown_recorded = not isinstance(exc, RequestPolicyIncompatibility)
+            health_cooldown_recorded = not isinstance(
+                exc,
+                (RequestPolicyIncompatibility, ProviderRequestRejected),
+            )
             if health_cooldown_recorded:
                 _record_failure(settings, choice, states, exc)
             failure_class = (
                 "request_policy_incompatible"
                 if isinstance(exc, RequestPolicyIncompatibility)
-                else classify_route_failure(str(exc))
+                else (
+                    "provider_request_rejected"
+                    if isinstance(exc, ProviderRequestRejected)
+                    else classify_route_failure(str(exc))
+                )
             )
             _append_ledger(
                 settings,
@@ -6647,6 +6876,9 @@ def run_llm_task(
                     "health_cooldown_recorded": health_cooldown_recorded,
                     "request_policy_reason": (
                         exc.reason if isinstance(exc, RequestPolicyIncompatibility) else None
+                    ),
+                    "provider_request_rejection": (
+                        exc.evidence() if isinstance(exc, ProviderRequestRejected) else None
                     ),
                     "error": str(exc).replace("\n", " ")[:240],
                 },
