@@ -87,7 +87,7 @@ class GovernedStructuredOutputTests(unittest.TestCase):
     def test_nonterminal_finish_reasons_are_terminal_without_side_effects(self) -> None:
         provider = LLMProvider(
             "qwen-frontier-paid",
-            "https://qwen.test/v1",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "QWEN_KEY",
             ("qwen3.7-max", "qwen3.7-plus"),
             False,
@@ -359,7 +359,7 @@ class GovernedStructuredOutputTests(unittest.TestCase):
         self.assertFalse(route_state_exists)
 
     def test_valid_audit_and_ordinary_nonstructured_task_do_not_regress(self) -> None:
-        paid = LLMProvider("qwen-frontier-paid", "https://qwen.test/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid")
+        paid = LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid")
         free = LLMProvider("current-free", "https://free.test/v1", "FREE_KEY", ("model-a",), True, 1, "permanent_free")
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._settings(Path(tmp), (paid, free))
@@ -484,7 +484,7 @@ class GovernedStructuredOutputTests(unittest.TestCase):
     def test_qwen_native_json_schema_payload_and_final_answer_reserve(self) -> None:
         provider = LLMProvider(
             "qwen-frontier-paid",
-            "https://qwen.test/v1",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "QWEN_KEY",
             ("qwen3.7-max",),
             False,
@@ -533,7 +533,7 @@ class GovernedStructuredOutputTests(unittest.TestCase):
             "json_schema": {"name": "smart_llm_router_output", "strict": True, "schema": schema},
         }
         qwen = LLMChoice(
-            LLMProvider("qwen-frontier-paid", "https://qwen.test/v1", "QWEN_KEY", ("qwen3.7-plus",), False, 1, "paid"),
+            LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "QWEN_KEY", ("qwen3.7-plus",), False, 1, "paid"),
             "qwen3.7-plus",
         )
         with patch.dict(os.environ, {"QWEN_KEY": "synthetic"}, clear=True):
@@ -563,6 +563,21 @@ class GovernedStructuredOutputTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "provider_native_structured_output_unsupported.*blocked_before_send"):
                 _call_openai_compatible(
                     unsupported,
+                    messages=[{"role": "user", "content": "public synthetic"}],
+                    timeout=1,
+                    temperature=0.2,
+                    response_format=response_format,
+                )
+        client_class.assert_not_called()
+
+        third_party_qwen = LLMChoice(
+            LLMProvider("qwen-compatible-paid", "https://third-party.test/v1", "MISSING_KEY", ("qwen3.7-max",), False, 1, "paid"),
+            "qwen3.7-max",
+        )
+        with patch.dict(os.environ, {}, clear=True), patch("smart_llm_router.router.httpx.Client") as client_class:
+            with self.assertRaisesRegex(RuntimeError, "provider_native_structured_output_unsupported.*blocked_before_send"):
+                _call_openai_compatible(
+                    third_party_qwen,
                     messages=[{"role": "user", "content": "public synthetic"}],
                     timeout=1,
                     temperature=0.2,

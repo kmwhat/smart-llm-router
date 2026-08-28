@@ -2991,7 +2991,12 @@ def _provider_native_response_format_supported(
     if response_format.get("type") != "json_schema":
         return True
     model = choice.model.lower()
-    return provider_family == "qwen" and bool(
+    hostname = (urlparse(choice.provider.base_url).hostname or "").lower()
+    official_qwen_endpoint = (
+        hostname in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
+        or hostname.endswith(".maas.aliyuncs.com")
+    )
+    return provider_family == "qwen" and official_qwen_endpoint and bool(
         re.match(r"^qwen3\.(?:7-(?:plus|flash|max)|8-max)(?:$|-)", model)
     )
 
