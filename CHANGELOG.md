@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.5 - 2026-08-29
+
+- Projected caller JSON Schemas into the strict subset accepted by official
+  Qwen native structured-output transport while retaining the original schema
+  for complete local final validation.
+- Rejected unsupported or unsafe schema constructs before credential lookup or
+  HTTP send and emitted only sanitized rejection evidence.
+- Kept provider routes, quality bands, paid authorization, dependencies, and
+  model registrations unchanged from `0.9.4`.
+
 ## 0.9.4 - 2026-08-28
 
 - Preserved caller-supplied JSON Schema requirements through task

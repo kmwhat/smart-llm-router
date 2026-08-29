@@ -1,5 +1,20 @@
 # Public Release Readiness
 
+## 0.9.5 Stable Release — 2026-08-29
+
+Status: clean patch-release candidate only. Protected pull request, CI, tag,
+publication, registry activation, and global runtime projection remain separate;
+this document does not claim those later actions ran.
+
+- Official Qwen native structured-output transport receives a deterministic,
+  provider-safe projection of the caller schema.
+- Final output is still validated locally against the complete original schema;
+  unsafe or unsupported projection inputs fail closed before credential lookup
+  or network send with sanitized evidence.
+- Provider routes, role-quality bands, paid authorization, dependencies, and
+  model registrations are unchanged from `0.9.4`.
+- v0.9.4 remains the immediate rollback through activation verification.
+
 ## 0.9.4 Stable Release — 2026-08-28
 
 Status: clean release-freeze candidate only. Protected pull request, CI, tag,

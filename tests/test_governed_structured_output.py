@@ -5,11 +5,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+
 from smart_llm_router.budget import _state_path, finalize_workflow_reservation
 from smart_llm_router.config import LLMProvider, Settings
 from smart_llm_router.router import (
     InconclusiveModelOutput,
     LLMChoice,
+    ProviderRequestRejected,
     _cache_key,
     _call_openai_compatible,
     _estimated_cost_usd,
@@ -528,6 +531,7 @@ class GovernedStructuredOutputTests(unittest.TestCase):
 
     def test_direct_qwen_transports_schema_and_unsupported_route_blocks_before_key(self) -> None:
         schema = self._audit_schema()
+        original_schema = json.loads(json.dumps(schema))
         response_format = {
             "type": "json_schema",
             "json_schema": {"name": "smart_llm_router_output", "strict": True, "schema": schema},
@@ -553,7 +557,43 @@ class GovernedStructuredOutputTests(unittest.TestCase):
                     response_format=response_format,
                 )
                 payload = client_class.return_value.__enter__.return_value.post.call_args.kwargs["json"]
-        self.assertEqual(payload["response_format"], response_format)
+        provider_schema = payload["response_format"]["json_schema"]["schema"]
+        self.assertEqual(schema, original_schema)
+        self.assertEqual(provider_schema["type"], "object")
+        self.assertEqual(provider_schema["required"], schema["required"])
+        self.assertFalse(provider_schema["additionalProperties"])
+        self.assertNotIn("$schema", provider_schema)
+        self.assertNotIn("title", provider_schema)
+        findings = provider_schema["properties"]["findings"]
+        self.assertEqual(findings["type"], "array")
+        self.assertEqual(findings["items"], {"type": "string"})
+        for keyword in ("minItems", "maxItems", "uniqueItems"):
+            self.assertNotIn(keyword, findings)
+
+        with patch.dict(os.environ, {"QWEN_KEY": "synthetic"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client_class:
+                response = client_class.return_value.__enter__.return_value.post.return_value
+                response.json.return_value = {
+                    "choices": [{"message": {"content": '{"verdict":"ACCEPT","release_blocker":false,"findings":["ok"],"confidence":"high"}'}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 10},
+                }
+                response.headers = {}
+                _, usage = _call_openai_compatible(
+                    qwen,
+                    messages=[{"role": "user", "content": "public synthetic"}],
+                    timeout=1,
+                    temperature=0.2,
+                    max_tokens=100,
+                    enable_thinking=False,
+                    response_format=response_format,
+                )
+                payload = client_class.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        self.assertIs(payload["enable_thinking"], False)
+        self.assertNotIn("thinking_budget", payload)
+        routing = usage["_routing_metadata"]
+        self.assertTrue(routing["provider_schema_projected"])
+        self.assertEqual(routing["provider_schema_projection_version"], "qwen-json-schema-v1")
+        self.assertRegex(routing["provider_schema_fingerprint"], r"^[0-9a-f]{64}$")
 
         unsupported = LLMChoice(
             LLMProvider("gemini-paid", "https://gemini.test/v1", "MISSING_KEY", ("gemini-2.5-pro",), False, 1, "paid"),
@@ -563,6 +603,169 @@ class GovernedStructuredOutputTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "provider_native_structured_output_unsupported.*blocked_before_send"):
                 _call_openai_compatible(
                     unsupported,
+                    messages=[{"role": "user", "content": "public synthetic"}],
+                    timeout=1,
+                    temperature=0.2,
+                    response_format=response_format,
+                )
+        client_class.assert_not_called()
+
+    def test_qwen_schema_http_400_is_sanitized_and_does_not_expose_body(self) -> None:
+        schema = self._audit_schema()
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "smart_llm_router_output", "strict": True, "schema": schema},
+        }
+        qwen = LLMChoice(
+            LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "QWEN_KEY", ("qwen3.7-max",), False, 1, "paid"),
+            "qwen3.7-max",
+        )
+        request = httpx.Request("POST", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+        rejected = httpx.Response(
+            400,
+            request=request,
+            json={
+                "error": {
+                    "code": "InvalidParameter.ResponseFormat",
+                    "type": "invalid_request_error",
+                    "param": "response_format",
+                    "message": "JSON schema invalid; never persist sk-private-secret-value",
+                }
+            },
+        )
+        with patch.dict(os.environ, {"QWEN_KEY": "synthetic"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client_class:
+                client_class.return_value.__enter__.return_value.post.return_value = rejected
+                with self.assertRaises(ProviderRequestRejected) as caught:
+                    _call_openai_compatible(
+                        qwen,
+                        messages=[{"role": "user", "content": "public synthetic"}],
+                        timeout=1,
+                        temperature=0.2,
+                        max_tokens=100,
+                        enable_thinking=False,
+                        response_format=response_format,
+                    )
+        evidence = caught.exception.evidence()
+        self.assertEqual(evidence["status_code"], 400)
+        self.assertEqual(evidence["reason"], "structured_output_constraint")
+        self.assertEqual(evidence["error_code"], "InvalidParameter.ResponseFormat")
+        self.assertEqual(evidence["error_type"], "invalid_request_error")
+        self.assertEqual(evidence["error_param"], "response_format")
+        self.assertTrue(evidence["provider_schema_projected"])
+        self.assertNotIn("private-secret", str(caught.exception))
+        self.assertNotIn("private-secret", json.dumps(evidence))
+
+        billing = httpx.Response(
+            400,
+            request=request,
+            json={"error": {"code": "Arrearage", "message": "account billing state"}},
+        )
+        with patch.dict(os.environ, {"QWEN_KEY": "synthetic"}, clear=True):
+            with patch("smart_llm_router.router.httpx.Client") as client_class:
+                client_class.return_value.__enter__.return_value.post.return_value = billing
+                with self.assertRaises(httpx.HTTPStatusError):
+                    _call_openai_compatible(
+                        qwen,
+                        messages=[{"role": "user", "content": "public synthetic"}],
+                        timeout=1,
+                        temperature=0.2,
+                        response_format=response_format,
+                    )
+
+    def test_qwen_schema_rejection_ledger_is_sanitized_zero_cost_and_no_cooldown(self) -> None:
+        provider = LLMProvider(
+            "qwen-frontier-paid",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "QWEN_KEY",
+            ("qwen3.7-max",),
+            False,
+            1,
+            "paid",
+        )
+        rejection = ProviderRequestRejected(
+            400,
+            reason="structured_output_constraint",
+            error_code="InvalidParameter.ResponseFormat",
+            error_type="invalid_request_error",
+            error_param="response_format",
+            provider_schema_projected=True,
+            provider_schema_fingerprint="a" * 64,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = self._settings(Path(tmp), (provider,))
+            with patch.dict(os.environ, {"QWEN_KEY": "synthetic", "SMART_LLM_CACHE": "false"}, clear=True):
+                with patch("smart_llm_router.router._call_openai_compatible", side_effect=rejection) as send:
+                    with self.assertRaisesRegex(RuntimeError, "所有模型调用失败"):
+                        run_llm_task(
+                            settings,
+                            task="audit",
+                            prompt="Review public synthetic evidence.",
+                            prefer_free=False,
+                            paid_fallback=True,
+                            quality_target="frontier",
+                            privacy="external_allowed",
+                            provider="qwen-frontier-paid",
+                            model="qwen3.7-max",
+                            max_cost_usd=0.01,
+                            max_output_tokens=100,
+                            structured_output_schema=self._audit_schema(),
+                            workflow_id="synthetic-qwen-schema-rejection",
+                            workflow_max_cost_usd=0.01,
+                            workflow_stage="audit",
+                        )
+            ledger = [
+                json.loads(line)
+                for line in (settings.data_dir / "llm_cost_ledger.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            state = json.loads(
+                _state_path(settings.budget_authority_dir, "synthetic-qwen-schema-rejection").read_text(
+                    encoding="utf-8"
+                )
+            )
+            route_state_exists = (settings.data_dir / "llm_router_state.json").exists()
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual([row["event"] for row in ledger], ["model_failure"])
+        self.assertEqual(ledger[0]["failure_class"], "provider_request_rejected")
+        self.assertFalse(ledger[0]["health_cooldown_recorded"])
+        self.assertEqual(ledger[0]["provider_request_rejection"], rejection.evidence())
+        self.assertIsNone(ledger[0]["estimated_cost_usd"])
+        self.assertEqual(state["spent_usd"], 0.0)
+        self.assertEqual(state["reservations"], {})
+        self.assertFalse(route_state_exists)
+
+    def test_qwen_projection_keeps_full_local_schema_authoritative(self) -> None:
+        schema = self._audit_schema()
+        invalid = json.dumps(
+            {
+                "verdict": "ACCEPT",
+                "release_blocker": False,
+                "findings": [],
+                "confidence": "high",
+            }
+        )
+        self.assertEqual(
+            _validate_structured_output(invalid, "json", finish_reason="stop", schema=schema),
+            (False, "structured_output_schema_validation_failed"),
+        )
+
+    def test_qwen_unprojectable_combinator_blocks_before_key_and_http(self) -> None:
+        schema = {
+            "type": "object",
+            "allOf": [{"required": ["verdict"], "properties": {"verdict": {"type": "string"}}}],
+        }
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "smart_llm_router_output", "strict": True, "schema": schema},
+        }
+        qwen = LLMChoice(
+            LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "MISSING_KEY", ("qwen3.7-max",), False, 1, "paid"),
+            "qwen3.7-max",
+        )
+        with patch.dict(os.environ, {}, clear=True), patch("smart_llm_router.router.httpx.Client") as client_class:
+            with self.assertRaisesRegex(RuntimeError, "qwen_provider_schema_projection_unsupported.*blocked_before_send"):
+                _call_openai_compatible(
+                    qwen,
                     messages=[{"role": "user", "content": "public synthetic"}],
                     timeout=1,
                     temperature=0.2,
