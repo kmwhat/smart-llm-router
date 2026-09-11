@@ -1,5 +1,19 @@
 # Public Release Readiness
 
+## 0.9.6 Stable Release — 2026-09-11
+
+Status: release candidate for DeepSeek V4.1 Flash synchronization. The stable
+API alias remains `deepseek-v4-flash`; role-quality promotion remains gated by a
+current endpoint golden evaluation and independent review.
+
+- Conservative peak cache-miss/input and output pricing is USD 0.44 / 1.32 per
+  million tokens.
+- Hermes main-agent configuration is external to this public package and uses
+  `deepseek-v4-flash` with `max` reasoning effort; the isolated investing
+  profile remains unchanged.
+- No provider call is implied by package metadata; live calls require an
+  explicit finite budget and are not part of this release artifact gate.
+
 ## 0.9.5 Stable Release — 2026-08-29
 
 Status: clean patch-release candidate only. Protected pull request, CI, tag,
@@ -109,7 +123,7 @@ this repository document does not by itself assert that those external gates ran
 - The portable launcher retains the verified source-binding repair while
   preserving caller working-directory and relative-path behavior.
 - MiniMax remains an explicitly authorized paid text fallback without governed
-  role-quality promotion. DeepSeek V4 Flash remains pending its role-matched
+  role-quality promotion. DeepSeek V4.1 Flash remains pending its role-matched
   audit-quality gates.
 - Public source and release artifacts must contain no credential values, private
   environment files, credential catalogs, runtime ledgers, caches, or backups.
@@ -148,7 +162,7 @@ projection.
   unchanged.
 - Returned model metadata is bounded and validated; malformed or
   non-equivalent model substitution fails closed.
-- The reviewed `deepseek-v4-flash-0731` aliases remain
+- The reviewed `deepseek-v4-flash` alias (currently serving V4.1 Flash) remains
   `pending_role_golden_gate`, with no `audit` or `plan_audit` quality band.
 - The existing public `v0.9.0rc1` tag and prerelease remain immutable history;
   this candidate may use only a new `v0.9.0rc2` tag after all later gates pass.

@@ -37,7 +37,7 @@ smart-llm-router workflow-check \
 
 Use the workflow v2 difficulty profiles instead of forcing every task through one chain. `simple` uses a workspace-native or cheapest-qualified executor plus deterministic checks. `standard` adds strong Codex planning and independent audit. `complex` declares Codex GPT-5.6 Sol planning, sourced Qwen-Max research enhancement, DeepSeek plan challenge audit, bounded low-cost repairs, original-auditor delta verification, economical execution, deterministic checkpoints, independent final verification, and closeout. Codex subscription stages are controller declarations; Hermes and the router must not claim a provider API invoked the subscription model.
 
-Enforce minimum role bands `draft=2`, `production=3`, `audit=4`, and `frontier=4`; lower or unregistered models never enter that role task. Dedicated `research_enhance` and `plan_audit` roles follow the approved Qwen and DeepSeek families after capability, endpoint health, promotion, privacy, and budget gates. Flash-0731 remains ineligible until a complete current-endpoint role gate passes. Final verification must differ from execution, while delta verification reuses the original auditor identity.
+Enforce minimum role bands `draft=2`, `production=3`, `audit=4`, and `frontier=4`; lower or unregistered models never enter that role task. Dedicated `research_enhance` and `plan_audit` roles follow the approved Qwen and DeepSeek families after capability, endpoint health, promotion, privacy, and budget gates. V4.1 Flash remains ineligible until a complete current-endpoint role gate passes. Final verification must differ from execution, while delta verification reuses the original auditor identity.
 
 `doctor` is the offline readiness surface: it explains configuration drift,
 billing class, role coverage, key rotations, and important exclusion reasons.
@@ -59,7 +59,7 @@ The public template keeps Gemini in free-tier mode. Never route it as paid unles
 
 OpenRouter and Groq free candidates are discovered dynamically. The runtime refreshes a stale discovery snapshot on demand (default six hours), keeps the last provider snapshot when discovery temporarily fails, and cools a model after 429, timeout, or endpoint failure. Groq availability is quota-backed trial capacity, not guaranteed permanent free capacity. Newly discovered models may serve low-risk general work, but they must pass task probes and receive an explicit role quality band before planning, execution, audit, or final verification. The current exception is the evidence-backed GPT-OSS 120B verification band above; it is registered, not merely discovered.
 
-DeepSeek-V4-Flash-0731 remains a pending candidate after its NVIDIA planning gate passed two public cases and then returned 529. Do not assign it a production role band until a complete matching golden run passes.
+The stable `deepseek-v4-flash` alias serving V4.1 Flash remains a pending candidate after its NVIDIA planning gate passed two public cases and then returned 529. Do not assign it a production role band until a complete matching golden run passes.
 
 For audio/video transcription, use local `asr-status` and `transcribe` first. Private images, chat records, identity data, and raw private media stay local unless external upload is explicitly authorized.
 

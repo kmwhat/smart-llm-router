@@ -127,7 +127,7 @@ Default behavior:
 - For non-trivial production work, prevent rework before optimizing token price: freeze the objective and measurable success criteria, audit the plan independently, execute one approved stage, checkpoint drift and evidence, then independently verify the final result against the original objective.
 - Use `workflow-plan` for the complete local dry-run and cumulative budget ceiling. Use `workflow-check` after scope changes, meaningful milestones, failures, and final delivery. A `verify_required` or `stop` decision must not be silently overridden.
 - Use one selected main model per stage. Planning and execution do not run ensembles; plan audit and final verification are separate governance gates.
-- For complex governed work, use Sol/OpenAI for workspace planning, Qwen-Max for sourced research enhancement, DeepSeek for independent plan challenge audit, the cheapest qualified execution route, and a final verifier independent from execution. Flash-0731 cannot replace V4-Pro until the current endpoint passes the matching role golden gate.
+- For complex governed work, use Sol/OpenAI for workspace planning, Qwen-Max for sourced research enhancement, DeepSeek for independent plan challenge audit, the cheapest qualified execution route, and a final verifier independent from execution. V4.1 Flash cannot replace V4-Pro until the current endpoint passes the matching role golden gate.
 - Treat same-model key rotation as availability failover only. Plan audit must differ from planning and research enhancement, final verification must differ from execution, and delta verification must reuse the corresponding original auditor.
 - Distinguish `permanent_free`, `trial_quota`, and `paid`; Qwen, NVIDIA, and Ark trial resources are not permanent-free promises.
 - Treat MiniMax China `MiniMax-M3` and `MiniMax-M2.7` as paid text routes. They require explicit paid authorization and a cost ceiling, and remain outside production role bands until matching golden gates pass.
@@ -154,7 +154,7 @@ Default behavior:
 - Prefer `refresh-modalities` for important checks; it probes text, vision/OCR, transcript correction, and code routes separately instead of treating a generic QA success as global health. It excludes unprotected trial routes unless `--include-unprotected-trial` is explicitly used for an authorized audit.
 - The public template keeps Gemini in free-tier mode. Suppress paid Gemini unless `SMART_LLM_GEMINI_PAID_ENABLED=true`; use its free tier only for public, non-sensitive inputs because quota is restricted and free-tier content may be used for product improvement.
 - Role routing is quality-and-cost aware across DeepSeek V4, Qwen 3.7, GLM-5.2, Kimi K3, Gemini Free Tier, and Doubao Seed 2.1/2.0. A public model name is only a candidate until its current endpoint passes a live probe.
-- DeepSeek-V4-Flash-0731 is a known low-cost candidate, not a promoted role model. The 2026-08-02 NVIDIA planning gate passed two cases and then returned 529, so keep it `pending_role_golden_gate` until a complete role-matched run passes.
+- The stable `deepseek-v4-flash` API alias currently serves the DeepSeek-V4.1-Flash candidate, not a promoted role model. The 2026-08-02 NVIDIA planning gate passed two cases and then returned 529, so keep it `pending_role_golden_gate` until a complete role-matched run passes.
 - All ordinary tasks default to no paid authorization; complexity controls the
   quality floor, not permission to spend.
 - Repeated identical requests can hit the local response cache.

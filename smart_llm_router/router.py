@@ -338,8 +338,8 @@ ROLE_QUALITY_BANDS: dict[str, dict[str, int]] = {
 PENDING_ROLE_CANDIDATES: dict[str, dict[str, str]] = {
     "deepseek-v4-flash": {
         "status": "pending_role_golden_gate",
-        "reason": "official_0731_agent_update_but_local_plan_gate_failed_route_stability",
-        "version": "DeepSeek-V4-Flash-0731",
+        "reason": "official_v41_open_weights_released_but_api_alias_role_gate_not_revalidated",
+        "version": "DeepSeek-V4.1-Flash",
     },
 }
 
@@ -384,7 +384,9 @@ MULTIMODAL_QUALITY_BANDS = {
 # Conservative public list prices in USD per million tokens. For prices
 # published in CNY, conversion happens at runtime using SMART_LLM_CNY_PER_USD.
 MODEL_PRICE_CATALOG: dict[str, dict[str, float | str]] = {
-    "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "currency": "USD"},
+    # The API keeps the stable deepseek-v4-flash alias. Reserve current peak
+    # cache-miss/output pricing; off-peak billing may settle lower.
+    "deepseek-v4-flash": {"input": 0.44, "output": 1.32, "currency": "USD"},
     "deepseek-v4-pro": {"input": 0.435, "output": 0.87, "currency": "USD"},
     # DeepSeek publishes peak and off-peak prices for Vision Exp. Reserve the
     # higher peak cache-miss/input and output rates so budgets never depend on
