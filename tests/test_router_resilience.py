@@ -163,7 +163,7 @@ class RouterResilienceTests(unittest.TestCase):
         excluded = next(row for row in plan["why_not"] if row["model"] == "deepseek-v4-pro")
         self.assertIn("trial_quota_guard_missing", excluded["reasons"])
 
-    def test_flash_0731_is_visible_as_pending_not_silently_promoted(self) -> None:
+    def test_flash_v41_is_visible_as_pending_not_silently_promoted(self) -> None:
         provider = LLMProvider(
             "deepseek-direct-paid",
             "https://example.test/v1",
@@ -175,7 +175,7 @@ class RouterResilienceTests(unittest.TestCase):
         )
         choice = LLMChoice(provider=provider, model="deepseek-v4-flash")
         capability = describe_choice_capability(choice)
-        self.assertEqual(capability["role_candidate_status"]["version"], "DeepSeek-V4-Flash-0731")
+        self.assertEqual(capability["role_candidate_status"]["version"], "DeepSeek-V4.1-Flash")
         with tempfile.TemporaryDirectory() as tmp:
             settings = self._settings(Path(tmp), (provider,))
             with patch.dict(os.environ, {"DEEPSEEK_KEY": "secret"}, clear=True):

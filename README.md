@@ -3,7 +3,9 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.5 patch release projects caller schemas into the provider-supported
+The 0.9.6 patch release tracks the latest DeepSeek V4.1 Flash served by the
+stable `deepseek-v4-flash` API alias, updates conservative peak pricing, and
+keeps role promotion fail-closed. The 0.9.5 patch release projects caller schemas into the provider-supported
 Qwen JSON Schema subset while retaining full local validation, and rejects
 unsafe or unsupported constructs before credential lookup or network send.
 The 0.9.4 patch release preserves explicit JSON Schema requirements through
@@ -133,10 +135,10 @@ $HOME/.local/state/smart-llm-router
 - 视觉图片压缩：发送前自动压缩为适合 API 的 JPEG，避免手机原图上传超时。
 - 失败冷却：429、超时、403、空返回会进入冷却，下次跳过。
 - 免费池全冷却自救：调用前轻量探活，避免误入付费。
-- 角色路线同时考虑任务专长与成本：DeepSeek V4、Qwen 3.7、GLM-5.2、Kimi K3、Gemini Free Tier 和 Doubao Seed 2.1/2.0 分工协作。
+- 角色路线同时考虑任务专长与成本：DeepSeek V4.1/V4 Pro、Qwen 3.7、GLM-5.2、Kimi K3、Gemini Free Tier 和 Doubao Seed 2.1/2.0 分工协作。
 - MiniMax 中国区付费文本路线：`MiniMax-M3` 为普通文本付费候选，`MiniMax-M2.7` 为同供应商回退；两者必须通过显式付费与预算门，且在角色 golden gate 通过前没有 plan/audit/verify 质量档。
 - 规划模型不强制免费：先由复杂度与风险确定质量档，再在同档合格路线中按重试修正后的预期总成本和延迟选择。
-- DeepSeek-V4-Flash-0731 已登记为待晋升候选；受控规划集完成 2/5 后遇到 529，稳定性门未过，暂不进入生产角色。
+- `deepseek-v4-flash` 稳定 API 别名的当前版本已登记为 DeepSeek-V4.1-Flash 待晋升候选；旧版受控规划集稳定性门未过，因此本次同步不自动授予生产角色质量档。
 - 本地复杂度评分：先判断 `simple`、`medium`、`hard` 并确定质量门；复杂度不会自动授予付费权限。
 - 成本/调用账本：记录每次模型调用、失败和缓存命中，便于后续调优。
 - 历史健康真值面：`route-stats` 按任务/provider/model 汇总成功率、失败类型、P95 延迟和观测成本；明确的本地基础设施故障不计入模型失败率。
@@ -154,13 +156,13 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.5` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
+`0.9.6` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
 会暂时不可用；此时请等待发布门完成，或按下一节从源码验证，不要改用旧版本链接：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.5/smart_llm_router-0.9.5-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.6/smart_llm_router-0.9.6-py3-none-any.whl"
 smart-llm-router --help
 ```
 
@@ -266,7 +268,7 @@ smart-llm-router task "Return OK" --task qa --free-only
 |---|---|---|
 | 工作区规划 | 约束、架构、验收设计 | Codex GPT-5.6 Sol 控制器声明；简单任务可用 Terra |
 | 研究增强 | 带来源的互联网方法学习与增量设计 | Qwen 3.7 Max；Kimi K3 备选 |
-| 规划挑战审计 | 独立检查遗漏、错误假设和不可执行点 | DeepSeek V4 Pro；Flash-0731 通过角色门后优先 |
+| 规划挑战审计 | 独立检查遗漏、错误假设和不可执行点 | DeepSeek V4 Pro；V4.1 Flash 通过角色门后优先 |
 | 执行 | 长链路工程和代码落地 | GLM-5.2、DeepSeek V4 Pro、Doubao Seed 2.0 Code |
 | 审计 | 跨厂商找错与风险覆盖 | Gemini 2.5 Pro Free Tier、DeepSeek V4 Pro、Qwen 3.7 Max |
 | 复验 | 不继承主结论重新核对 | Gemini 2.5 Pro Free Tier、DeepSeek V4 Pro、Doubao Seed 2.x；公开草稿可用 Groq GPT-OSS 120B（二档、试用额度） |

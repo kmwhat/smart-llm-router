@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.6 - 2026-09-11
+
+- Synchronized the stable `deepseek-v4-flash` API alias with the current
+  DeepSeek-V4.1-Flash model identity and conservative peak pricing.
+- Updated Hermes integration guidance to use DeepSeek Flash at `max` reasoning
+  effort while keeping role-quality promotion fail-closed until a complete
+  current-endpoint golden gate passes.
+- Added official-source synchronization notes and regression coverage without
+  changing provider IDs, privacy policy, or paid authorization semantics.
+
 ## 0.9.5 - 2026-08-29
 
 - Projected caller JSON Schemas into the strict subset accepted by official

@@ -474,9 +474,12 @@ class RoleRoutingTests(unittest.TestCase):
     def test_builtin_prices_are_available_without_env_overrides(self) -> None:
         provider = LLMProvider("deepseek-direct-paid", "https://deepseek.test/v1", "KEY", ("deepseek-v4-pro",), False, 1, "paid")
         choice = LLMChoice(provider=provider, model="deepseek-v4-pro")
+        flash = LLMChoice(provider=provider, model="deepseek-v4-flash")
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(_price_per_million(choice, "input"), 0.435)
             self.assertEqual(_price_per_million(choice, "output"), 0.87)
+            self.assertEqual(_price_per_million(flash, "input"), 0.44)
+            self.assertEqual(_price_per_million(flash, "output"), 1.32)
 
     def test_budget_converts_to_model_specific_output_limit(self) -> None:
         provider = LLMProvider("gemini-frontier-paid", "https://gemini.test/v1", "KEY", ("gemini-2.5-pro",), False, 1, "paid")
