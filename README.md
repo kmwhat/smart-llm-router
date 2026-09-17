@@ -3,7 +3,7 @@
 [![CI](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/kmwhat/smart-llm-router/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-The 0.9.6 patch release tracks the latest DeepSeek V4.1 Flash served by the
+The 0.9.7 patch release adds route incident quarantine and bounded health cycles while retaining the latest DeepSeek V4.1 Flash served by the
 stable `deepseek-v4-flash` API alias, updates conservative peak pricing, and
 keeps role promotion fail-closed. The 0.9.5 patch release projects caller schemas into the provider-supported
 Qwen JSON Schema subset while retaining full local validation, and rejects
@@ -156,13 +156,13 @@ $HOME/.local/state/smart-llm-router
 
 ## 安装
 
-`0.9.6` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
+`0.9.7` 稳定版的规范安装命令如下。若对应的 GitHub Release 尚未完成，下载 URL
 会暂时不可用；此时请等待发布门完成，或按下一节从源码验证，不要改用旧版本链接：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.6/smart_llm_router-0.9.6-py3-none-any.whl"
+python -m pip install "https://github.com/kmwhat/smart-llm-router/releases/download/v0.9.7/smart_llm_router-0.9.7-py3-none-any.whl"
 smart-llm-router --help
 ```
 

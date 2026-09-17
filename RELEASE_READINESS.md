@@ -1,5 +1,18 @@
 # Public Release Readiness
 
+## 0.9.7 Stable Release — 2026-09-18
+
+Status: health repair release candidate. Failed 404 routes are quarantined and
+incident evidence is sanitized; daily free/local checks and bounded weekly
+paid checks remain operational safeguards. The DeepSeek Flash route remains
+the configured Hermes default, while role-quality promotion still requires
+current golden evaluation and independent review.
+
+- Explicit Gemini model configuration avoids stale retired model IDs.
+- Explicit Ark endpoint/model configuration avoids blind stale Doubao routes.
+- 404/410 failures enter a 30-day quarantine and produce sanitized incidents.
+- Public finance golden set A-G is included for later blind quality review.
+
 ## 0.9.6 Stable Release — 2026-09-11
 
 Status: release candidate for DeepSeek V4.1 Flash synchronization. The stable
