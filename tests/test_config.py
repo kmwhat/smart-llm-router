@@ -119,7 +119,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("kimi-frontier-paid", names)
         self.assertIn("gemini-free", names)
         self.assertNotIn("gemini-frontier-paid", names)
-        self.assertIn("doubao-frontier-paid", names)
+        self.assertNotIn("doubao-frontier-paid", names)
         self.assertIn("minimax-frontier-paid", names)
         minimax = next(provider for provider in settings.providers if provider.name == "minimax-frontier-paid")
         self.assertFalse(minimax.free)
@@ -149,6 +149,14 @@ class ConfigTests(unittest.TestCase):
         ):
             paid_settings = load_settings()
         self.assertIn("gemini-frontier-paid", {provider.name for provider in paid_settings.providers})
+
+    def test_ark_frontier_route_requires_explicit_model_or_endpoint_id(self) -> None:
+        with patch.dict(os.environ, {"ARK_API_KEY": "test"}, clear=True):
+            settings = load_settings()
+        self.assertNotIn("doubao-frontier-paid", {provider.name for provider in settings.providers})
+        with patch.dict(os.environ, {"ARK_API_KEY": "test", "ARK_ENDPOINT_ID": "ep-synthetic"}, clear=True):
+            settings = load_settings()
+        self.assertIn("doubao-ark-paid", {provider.name for provider in settings.providers})
 
     def test_groq_defaults_to_trial_quota_not_permanent_free(self) -> None:
         with patch.dict(

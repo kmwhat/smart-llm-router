@@ -35,6 +35,7 @@ from .router import (
     discover_openrouter_vision_free,
     discover_vision_pool,
     maintain_pool,
+    read_route_incidents,
     quick_benchmark,
     quick_vision_benchmark,
     preprocess_input,
@@ -83,6 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     route_stats = sub.add_parser("route-stats", help="按任务/provider/model 汇总近期成功率、失败类型、延迟和成本")
     route_stats.add_argument("--task", choices=TASK_CHOICES)
     route_stats.add_argument("--limit", type=int, default=1000, help="最多读取最近多少条账本记录；0 表示全部")
+    incidents = sub.add_parser("incidents", help="查看脱敏路由事故与自动隔离记录")
+    incidents.add_argument("--limit", type=int, default=50)
 
     golden_eval = sub.add_parser("golden-eval", help="运行任务黄金集：候选与基线逐题实测，并生成独立盲审包")
     golden_eval.add_argument("suite_file")
@@ -358,6 +361,8 @@ def main() -> None:
         print(json.dumps(read_cost_ledger(settings, limit=args.limit), ensure_ascii=False, indent=2))
     elif args.command == "route-stats":
         print(json.dumps(route_performance_stats(settings, task=args.task, limit=args.limit), ensure_ascii=False, indent=2))
+    elif args.command == "incidents":
+        print(json.dumps(read_route_incidents(settings.data_dir, limit=args.limit), ensure_ascii=False, indent=2))
     elif args.command == "golden-eval":
         print(
             json.dumps(
