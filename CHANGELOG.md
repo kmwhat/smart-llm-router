@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.9.7 - 2026-09-18
+
+- Quarantine stale 404/410 routes with sanitized incidents and bounded health cycles.
+- Require explicit Ark endpoint/model identity and refresh Gemini defaults.
+- Add public synthetic finance routing golden set and capped weekly health script.
+
 ## 0.9.6 - 2026-09-11
 
 - Synchronized the stable `deepseek-v4-flash` API alias with the current
