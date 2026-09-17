@@ -19,14 +19,14 @@ class RouterCooldownTests(unittest.TestCase):
         response = httpx.Response(404, request=request)
         exc = httpx.HTTPStatusError("model not found", request=request, response=response)
 
-        self.assertEqual(_cooldown_for_error(exc, 1), timedelta(days=7))
+        self.assertEqual(_cooldown_for_error(exc, 1), timedelta(days=30))
 
     def test_retired_model_gets_long_cooldown(self) -> None:
         request = httpx.Request("POST", "https://example.test/v1/chat/completions")
         response = httpx.Response(410, request=request)
         exc = httpx.HTTPStatusError("model retired", request=request, response=response)
 
-        self.assertEqual(_cooldown_for_error(exc, 1), timedelta(days=7))
+        self.assertEqual(_cooldown_for_error(exc, 1), timedelta(days=30))
 
     def test_timeout_stays_short_and_progressive(self) -> None:
         exc = TimeoutError("The read operation timed out")

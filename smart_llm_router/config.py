@@ -110,18 +110,20 @@ def _load_providers() -> tuple[LLMProvider, ...]:
     if not gemini_paid_enabled:
         providers = [provider for provider in providers if not (_is_gemini_provider(provider) and not provider.free)]
     configured_names = {provider.name for provider in providers}
-    doubao_frontier_models = _csv_env("SMART_LLM_DOUBAO_FRONTIER_MODELS") or (
+    configured_doubao_models = _csv_env("SMART_LLM_DOUBAO_FRONTIER_MODELS")
+    doubao_frontier_models = configured_doubao_models or (
         "doubao-seed-2-1-pro",
         "doubao-seed-2-1-turbo",
         "doubao-seed-2-0-pro-260215",
         "doubao-seed-2-0-code-preview-260215",
     )
+    configured_gemini_models = _csv_env("SMART_LLM_GEMINI_MODELS")
     gemini_provider = (
         LLMProvider(
             "gemini-frontier-paid",
             "https://generativelanguage.googleapis.com/v1beta/openai",
             "GEMINI_API_KEY",
-            ("gemini-2.5-pro", "gemini-3.1-pro-preview"),
+            configured_gemini_models or ("gemini-3.1-pro-preview",),
             False,
             8,
             "paid",
@@ -131,7 +133,7 @@ def _load_providers() -> tuple[LLMProvider, ...]:
             "gemini-free",
             "https://generativelanguage.googleapis.com/v1beta/openai",
             "GEMINI_API_KEY",
-            ("gemini-2.5-pro", "gemini-2.5-flash-lite"),
+            configured_gemini_models or ("gemini-2.5-flash-lite",),
             True,
             2,
             "trial_quota",
@@ -150,7 +152,11 @@ def _load_providers() -> tuple[LLMProvider, ...]:
         ),
         LLMProvider("qwen-frontier-paid", "https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY", ("qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"), False, 7, "paid"),
         LLMProvider("kimi-frontier-paid", "https://api.moonshot.cn/v1", "KIMI_API_KEY", ("kimi-k3", "kimi-k2.6"), False, 7, "paid"),
-        LLMProvider("doubao-frontier-paid", "https://ark.cn-beijing.volces.com/api/v3", "ARK_API_KEY", doubao_frontier_models, False, 7, "trial_quota"),
+        *(
+            [LLMProvider("doubao-frontier-paid", "https://ark.cn-beijing.volces.com/api/v3", "ARK_API_KEY", doubao_frontier_models, False, 7, "trial_quota")]
+            if configured_doubao_models or os.getenv("ARK_ENDPOINT_ID", "").strip()
+            else []
+        ),
         gemini_provider,
         LLMProvider("zhipu-vision-paid", "https://open.bigmodel.cn/api/paas/v4", "ZHIPU_API_KEY", ("glm-4.6v", "glm-4v-flash"), False, 8),
         LLMProvider("zhipu-asr-paid", "https://open.bigmodel.cn/api/paas/v4", "ZHIPU_API_KEY", ("glm-asr-2512",), False, 8),

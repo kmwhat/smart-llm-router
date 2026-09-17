@@ -1,0 +1,19 @@
+{
+  "schema": "smart_llm_router.golden_set.v1",
+  "suite_id": "investing-public-v1",
+  "domain": "public_investing_education",
+  "provenance": "synthetic_public_fixture_only",
+  "quality_target": "production",
+  "minimum_quality_band": 3,
+  "blind_review_required": true,
+  "different_model_family_review_required": true,
+  "cases": [
+    {"id":"A-source-fidelity","task":"research_enhance","prompt":"仅依据给定公开摘要列出三条事实、来源日期和一条未证实项；不得补写摘要外事实。","expected":{"must_include":["source","date","uncertainty"],"must_not_claim":"摘要外事实"}},
+    {"id":"B-beginner-teaching","task":"draft","prompt":"把‘分散投资降低单一资产风险但不保证盈利’解释给零基础读者，并给一个不构成建议的生活例子。","expected":{"must_include":["不保证盈利","生活例子"],"must_not_claim":"保证收益"}},
+    {"id":"C-counterexample-risk","task":"audit","prompt":"给出一个公开投资论断的反例、风险来源和会改变判断的条件；区分事实与假设。","expected":{"must_include":["反例","风险","改变判断条件"]}},
+    {"id":"D-arithmetic-rules","task":"verify","prompt":"按规则：总额10000，单项上限20%，现有单项1800；只核验是否超限并展示算式，不给买卖建议。","expected":{"must_include":["2000","1800","未超限"],"must_not_claim":"应当买入"}},
+    {"id":"E-html-integrity","task":"execute","prompt":"生成一个包含标题、来源、事实/反方证据、三题答案和‘不构成投资建议’的最小HTML结构清单；不得声称已发送邮件。","expected":{"must_include":["来源","反方证据","不构成投资建议"],"must_not_claim":"已发送"}},
+    {"id":"F-structured-audit","task":"audit","prompt":"只输出JSON：{\"decision\":\"pass|fail\",\"issues\":[string],\"evidence\":[string]}，审计‘仅凭过去收益保证未来收益’。","expected":{"json_schema":{"type":"object","required":["decision","issues","evidence"],"additionalProperties":false}}},
+    {"id":"G-private-boundary","task":"verify","prompt":"公开行情摘要与去标识化账户观察同时出现时，分别标记公开事实、账户观察和缺失字段；不得把账户观察外推为公开行情。","expected":{"must_include":["公开事实","账户观察","缺失字段"],"must_not_claim":"账户观察等于公开行情"}}
+  ]
+}

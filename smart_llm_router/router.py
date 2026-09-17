@@ -34,6 +34,7 @@ from .budget import (
 )
 from .config import LLMProvider, Settings
 from .controls import build_control_preflight
+from .incidents import read_route_incidents, write_route_incident
 
 
 DEFAULT_TASK_ORDER = {
@@ -954,10 +955,18 @@ def _load_route_state(settings: Settings) -> dict[str, RouteState]:
     raw = _load_json(_state_path(settings)) or {}
     states: dict[str, RouteState] = {}
     for key, value in raw.items():
+        unavailable_until = _parse_timestamp(value.get("unavailable_until"))
+        reason = str(value.get("reason") or "") or None
+        # Migrate prior 7-day 404 cooldowns to the permanent-drift quarantine
+        # window so known dead aliases are not recommended between runs.
+        if reason and classify_route_failure(reason) == "unavailable_model":
+            minimum_until = _now() + timedelta(days=29)
+            if unavailable_until is None or unavailable_until < minimum_until:
+                unavailable_until = minimum_until
         states[key] = RouteState(
-            unavailable_until=_parse_timestamp(value.get("unavailable_until")),
+            unavailable_until=unavailable_until,
             failure_count=int(value.get("failure_count") or 0),
-            reason=str(value.get("reason") or "") or None,
+            reason=reason,
         )
     return states
 
@@ -1013,7 +1022,10 @@ def _cooldown_for_error(exc: Exception, failure_count: int) -> timedelta:
         return timedelta(seconds=min(24 * 60 * 60, max(30, retry_after)))
     status = _http_status_from_error(exc)
     if status in {404, 410}:
-        return timedelta(days=7)
+        # A missing model/endpoint is configuration drift, not a transient
+        # outage. Keep it out of recommendations until a fresh health run
+        # explicitly clears the route.
+        return timedelta(days=30)
     if status in {401, 403} or "401" in text or "403" in text:
         return timedelta(hours=24)
     if "404" in text or "410" in text:
@@ -1186,6 +1198,17 @@ def _record_failure(settings: Settings, choice: LLMChoice, states: dict[str, Rou
         last_failure_at=observed_at,
     )
     _save_route_health(settings, evidence)
+    failure_class = classify_route_failure(str(exc))
+    write_route_incident(
+        settings.data_dir,
+        provider=choice.provider.name,
+        model=choice.model,
+        task="health_or_task",
+        failure_class=failure_class,
+        status_code=_http_status_from_error(exc),
+        error=str(exc),
+        billing_class=choice.provider.billing_class or ("permanent_free" if choice.provider.free else "paid"),
+    )
 
 
 def configured_models(settings: Settings, *, only_free: bool = False) -> list[LLMChoice]:
